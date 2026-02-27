@@ -1,0 +1,108 @@
+# ============================================
+# Jupyter HUB - .gitignore
+# ============================================
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
+
+# Electron build outputs
+release/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.snap
+
+# Environment variables & secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+# API Keys & Sensitive Data (if any files are created)
+**/api-keys.json
+**/secrets.json
+**/*.key
+**/*.pem
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Testing
+coverage/
+*.lcov
+.nyc_output
+.cache/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Electron specific
+/electron-builder-output/
+/.webpack/
+*.asar
+
+# Package manager lock files (choose one strategy)
+# Keep pnpm-lock.yaml for reproducible builds
+# yarn.lock
+# package-lock.json
+
+# Vite
+vite.config.ts.timestamp-*
+
+# Local development
+.local/
+*.local
+
+# Misc
+*.orig
+.eslintcache
