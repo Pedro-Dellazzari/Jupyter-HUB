@@ -104,7 +104,7 @@ export function MainLayout() {
                   <motion.div
                     className={`flex items-center gap-3 px-4 py-3 rounded-2xl group relative overflow-hidden ${
                       isActive
-                        ? "gradient-green-vibrant text-white glow-green"
+                        ? "gradient-green-vibrant text-white"
                         : "glass-button text-slate-700 hover:text-slate-900"
                     }`}
                     whileHover={isActive ? {} : hoverAnimations.lift}
