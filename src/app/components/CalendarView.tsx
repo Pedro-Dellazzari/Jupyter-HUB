@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { db, CalendarEvent } from "../lib/db";
 
-interface CalendarEvent {
-  id: string;
-  title: string;
-  date: string;
-  time: string;
-  description: string;
-  color: string;
+// Map a DB row (scheduled_at = "YYYY-MM-DD HH:MM:SS") to display fields
+function toDisplayEvent(row: CalendarEvent): CalendarEvent & { date: string; time: string } {
+  const [datePart, timePart] = (row.scheduled_at ?? "").split(" ");
+  return {
+    ...row,
+    date: datePart ?? "",
+    time: timePart ? timePart.slice(0, 5) : "", // "HH:MM"
+  };
 }
 
 export function CalendarView() {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [events, setEvents] = useState<(CalendarEvent & { date: string; time: string })[]>([]);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -24,15 +26,8 @@ export function CalendarView() {
   });
 
   useEffect(() => {
-    const saved = localStorage.getItem("productivity-calendar");
-    if (saved) {
-      setEvents(JSON.parse(saved));
-    }
+    db.events.list().then((rows) => setEvents(rows.map(toDisplayEvent)));
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("productivity-calendar", JSON.stringify(events));
-  }, [events]);
 
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear();
@@ -60,24 +55,29 @@ export function CalendarView() {
     return events.filter((e) => e.date === dateStr);
   };
 
-  const addEvent = () => {
+  const addEvent = async () => {
     if (!selectedDate || !newEvent.title.trim()) return;
 
     const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
 
-    const event: CalendarEvent = {
-      id: Date.now().toString(),
+    const row = await db.events.add({
       title: newEvent.title,
       date: dateStr,
       time: newEvent.time,
       description: newEvent.description,
       color: newEvent.color,
-    };
+    });
 
-    setEvents([...events, event]);
+    setEvents((prev) => [...prev, toDisplayEvent(row)]);
     setShowAddModal(false);
     setNewEvent({ title: "", time: "", description: "", color: "#22c55e" });
     setSelectedDate(null);
+  };
+
+  const deleteEvent = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await db.events.delete(id);
+    setEvents((prev) => prev.filter((ev) => ev.id !== id));
   };
 
   const openAddModal = (day: number) => {
@@ -169,11 +169,20 @@ export function CalendarView() {
                     {dayEvents.slice(0, 2).map((event) => (
                       <div
                         key={event.id}
-                        className="text-xs text-slate-900 bg-slate-50 px-1 py-0.5 rounded truncate"
-                        style={{ borderLeft: `2px solid ${event.color}` }}
+                        className="text-xs text-slate-900 bg-slate-50 px-1 py-0.5 rounded truncate flex items-center justify-between gap-1"
+                        style={{ borderLeft: `2px solid ${event.color ?? "#22c55e"}` }}
                       >
-                        {event.time && <span className="opacity-60">{event.time} </span>}
-                        {event.title}
+                        <span className="truncate">
+                          {event.time && <span className="opacity-60">{event.time} </span>}
+                          {event.title}
+                        </span>
+                        <button
+                          onClick={(e) => deleteEvent(event.id, e)}
+                          className="shrink-0 opacity-50 hover:opacity-100 text-red-500 leading-none"
+                          title="Remove event"
+                        >
+                          ×
+                        </button>
                       </div>
                     ))}
                     {dayEvents.length > 2 && (

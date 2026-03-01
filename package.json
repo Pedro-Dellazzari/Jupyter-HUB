@@ -15,7 +15,8 @@
     "electron:build": "vite build && electron-builder",
     "electron:build:win": "vite build && electron-builder --win",
     "electron:build:mac": "vite build && electron-builder --mac",
-    "electron:build:linux": "vite build && electron-builder --linux"
+    "electron:build:linux": "vite build && electron-builder --linux",
+    "electron:rebuild": "echo 'sql.js uses WebAssembly - no rebuild needed'"
   },
   "build": {
     "appId": "com.jupyter.hub",
@@ -26,6 +27,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "node_modules/sql.js/dist/**/*",
       "package.json"
     ],
     "win": {
@@ -129,6 +131,7 @@
     "react-slick": "0.31.0",
     "recharts": "2.15.2",
     "sonner": "2.0.3",
+    "sql.js": "^1.14.0",
     "tailwind-merge": "3.2.0",
     "tw-animate-css": "1.3.8",
     "vaul": "1.1.2",
