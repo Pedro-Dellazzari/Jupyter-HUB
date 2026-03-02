@@ -1,8 +1,15 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings, RefreshCw } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { variants, springs, hoverAnimations, tapAnimations, staggerContainer } from "../lib/animations";
+import { db } from "../lib/db";
+
+type PomodoroItem = {
+  value: string;          // "free" | "task:{id}" | "habit:{id}"
+  label: string;
+  kind: "free" | "task" | "habit";
+};
 
 const navItems = [
   { path: "/", label: "Chat IA", icon: Terminal },
@@ -21,16 +28,91 @@ export function MainLayout() {
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [isRunning, setIsRunning] = useState(false);
   const [mode, setMode] = useState<"work" | "break">("work");
-  const [selectedTask, setSelectedTask] = useState("Trabalho Geral");
+  const [selectedTask, setSelectedTask] = useState("free");
+  const [pomodoroToast, setPomodoroToast] = useState<{ icon: string; text: string } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pomodoroItems, setPomodoroItems] = useState<PomodoroItem[]>([
+    { value: "free", label: "Sessão Livre", kind: "free" },
+  ]);
 
-  const availableTasks = [
-    "Trabalho Geral",
-    "Programação",
-    "Design",
-    "Preparação de Reunião",
-    "Email",
-    "Aprendizado",
-  ];
+  const loadPomodoroItems = async () => {
+    const today = new Date().toISOString().split("T")[0];
+    const [tasks, habits] = await Promise.all([db.tasks.list(), db.habits.list()]);
+
+    const taskItems: PomodoroItem[] = tasks
+      .filter(t => t.status !== "done" && t.status !== "cancelled" && t.status !== "archived")
+      .map(t => ({ value: `task:${t.id}`, label: t.title, kind: "task" as const }));
+
+    const habitItems: PomodoroItem[] = habits
+      .filter(h => !h.completions?.includes(today))
+      .map(h => ({ value: `habit:${h.id}`, label: h.title, kind: "habit" as const }));
+
+    const items: PomodoroItem[] = [
+      { value: "free", label: "Sessão Livre", kind: "free" },
+      ...taskItems,
+      ...habitItems,
+    ];
+    setPomodoroItems(items);
+    // Keep current selection only if it still exists
+    setSelectedTask(prev => items.some(i => i.value === prev) ? prev : "free");
+  };
+
+  useEffect(() => { loadPomodoroItems(); }, []);
+
+  // Request OS notification permission once on mount
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const playChime = () => {
+    try {
+      const ctx = new AudioContext();
+      // Gentle C-E-G arpeggio (major chord, sine waves)
+      const notes = [
+        { freq: 523.25, delay: 0,    dur: 1.6 }, // C5
+        { freq: 659.25, delay: 0.18, dur: 1.4 }, // E5
+        { freq: 783.99, delay: 0.36, dur: 1.2 }, // G5
+      ];
+      notes.forEach(({ freq, delay, dur }) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+        gain.gain.setValueAtTime(0, ctx.currentTime + delay);
+        gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + delay + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + dur);
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + dur);
+      });
+      // Close context after sound finishes
+      setTimeout(() => ctx.close(), 2500);
+    } catch {
+      // AudioContext not available
+    }
+  };
+
+  const notifyEnd = (finishedMode: "work" | "break") => {
+    const isWork = finishedMode === "work";
+    const icon   = isWork ? "🍅" : "☕";
+    const title  = isWork ? "Pomodoro completo!" : "Pausa encerrada";
+    const body   = isWork ? "Hora de uma pausa bem merecida." : "Pronto para mais 25 minutos?";
+
+    playChime();
+
+    // In-app toast
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setPomodoroToast({ icon, text: `${title} ${body}` });
+    toastTimer.current = setTimeout(() => setPomodoroToast(null), 4500);
+
+    // OS notification (works even when minimized)
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, silent: true });
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -40,7 +122,7 @@ export function MainLayout() {
       }, 1000);
     } else if (timeLeft === 0) {
       setIsRunning(false);
-      // Play notification sound or show alert
+      notifyEnd(mode);
       const newMode = mode === "work" ? "break" : "work";
       setMode(newMode);
       setTimeLeft(newMode === "work" ? 25 * 60 : 5 * 60);
@@ -68,6 +150,28 @@ export function MainLayout() {
 
   return (
     <div className="flex h-screen bg-white text-slate-900 font-mono overflow-hidden gradient-mesh-bg">
+
+      {/* Pomodoro end toast */}
+      <AnimatePresence>
+        {pomodoroToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 16, scale: 0.96 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 glass-card rounded-2xl border border-green-400/40 shadow-xl shadow-green-500/15 max-w-xs"
+          >
+            <span className="text-xl leading-none">{pomodoroToast.icon}</span>
+            <span className="text-xs text-slate-800 leading-snug flex-1">{pomodoroToast.text}</span>
+            <button
+              onClick={() => setPomodoroToast(null)}
+              className="text-slate-400 hover:text-slate-600 transition-colors shrink-0 text-xs leading-none"
+            >
+              ✕
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Sidebar */}
       <aside className="w-80 glass-panel border-r border-white/40 flex flex-col relative">
         {/* Sidebar Header */}
@@ -141,6 +245,13 @@ export function MainLayout() {
             <div className="text-xs text-slate-600 mb-3 tracking-wider font-semibold flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
               POMODORO
+              <button
+                onClick={loadPomodoroItems}
+                title="Atualizar lista"
+                className="ml-auto text-slate-400 hover:text-green-600 transition-colors"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
             </div>
             
             <div className="glass-card rounded-3xl p-4 relative overflow-hidden">
@@ -152,11 +263,25 @@ export function MainLayout() {
                   className="w-full px-3 py-2 text-xs glass-button rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-green-500/50 transition-all duration-300 cursor-pointer"
                   disabled={isRunning}
                 >
-                  {availableTasks.map((task, index) => (
-                    <option key={index} value={task}>
-                      {task}
-                    </option>
-                  ))}
+                  <option value="free">Sessão Livre</option>
+                  {pomodoroItems.filter(i => i.kind === "task").length > 0 && (
+                    <optgroup label="── Tarefas abertas ──">
+                      {pomodoroItems.filter(i => i.kind === "task").map(item => (
+                        <option key={item.value} value={item.value}>
+                          📋 {item.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {pomodoroItems.filter(i => i.kind === "habit").length > 0 && (
+                    <optgroup label="── Hábitos pendentes ──">
+                      {pomodoroItems.filter(i => i.kind === "habit").map(item => (
+                        <option key={item.value} value={item.value}>
+                          🔄 {item.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
