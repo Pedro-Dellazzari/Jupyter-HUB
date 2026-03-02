@@ -51,6 +51,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id)    => ipcRenderer.invoke('db:events:delete', id),
   },
 
+  // ── Pomodoro Sessions ──────────────────────────────────────────────────────
+  pomodoro: {
+    list:   (date) => ipcRenderer.invoke('db:pomodoro:list', date),
+    add:    (data) => ipcRenderer.invoke('db:pomodoro:add',  data),
+    delete: (id)   => ipcRenderer.invoke('db:pomodoro:delete', id),
+  },
+
   // ── AI ─────────────────────────────────────────────────────────────────────
   ai: {
     chat: (messages, settings) => ipcRenderer.invoke('ai:chat', messages, settings),

@@ -100,6 +100,26 @@ export interface CalendarEventInput {
   color: string;
 }
 
+export interface PomodoroSession {
+  id: string;
+  task_value: string;      // "free" | "task:{id}" | "habit:{id}"
+  task_label: string;
+  date: string;            // "YYYY-MM-DD"
+  started_at: string;      // "YYYY-MM-DD HH:MM:SS"
+  ended_at: string;
+  duration_mins: number;
+  created_at: string;
+}
+
+export interface PomodoroSessionInput {
+  taskValue: string;
+  taskLabel: string;
+  date: string;
+  startedAt: string;
+  endedAt: string;
+  durationMins: number;
+}
+
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -158,6 +178,11 @@ declare global {
         list:   ()                          => Promise<CalendarEvent[]>;
         add:    (data: CalendarEventInput)  => Promise<CalendarEvent>;
         delete: (id: string)                => Promise<void>;
+      };
+      pomodoro: {
+        list:   (date?: string)                  => Promise<PomodoroSession[]>;
+        add:    (data: PomodoroSessionInput)     => Promise<PomodoroSession>;
+        delete: (id: string)                     => Promise<void>;
       };
       ai: {
         chat: (messages: AIMessage[], settings: APISettings) => Promise<AIResponse>;
@@ -218,6 +243,12 @@ export const db = {
     list:   ()                         => api.events.list(),
     add:    (data: CalendarEventInput) => api.events.add(data),
     delete: (id: string)               => api.events.delete(id),
+  },
+
+  pomodoro: {
+    list:   (date?: string)                => api.pomodoro.list(date),
+    add:    (data: PomodoroSessionInput)   => api.pomodoro.add(data),
+    delete: (id: string)                   => api.pomodoro.delete(id),
   },
 
   ai: {

@@ -6,6 +6,7 @@ import { HabitsTracker } from "./components/HabitsTracker";
 import { CalendarView } from "./components/CalendarView";
 import { MeetingsPanel } from "./components/MeetingsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { FocusLog } from "./components/FocusLog";
 
 export const router = createBrowserRouter([
   {
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
       { path: "habits", Component: HabitsTracker },
       { path: "calendar", Component: CalendarView },
       { path: "meetings", Component: MeetingsPanel },
+      { path: "focus", Component: FocusLog },
       { path: "settings", Component: SettingsPanel },
     ],
   },

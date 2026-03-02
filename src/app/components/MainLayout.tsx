@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings, RefreshCw } from "lucide-react";
+import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings, RefreshCw, Clock } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { variants, springs, hoverAnimations, tapAnimations, staggerContainer } from "../lib/animations";
@@ -12,12 +12,13 @@ type PomodoroItem = {
 };
 
 const navItems = [
-  { path: "/", label: "Chat IA", icon: Terminal },
-  { path: "/todos", label: "Tarefas", icon: CheckSquare },
-  { path: "/habits", label: "Hábitos", icon: TrendingUp },
-  { path: "/calendar", label: "Calendário", icon: Calendar },
-  { path: "/meetings", label: "Reuniões", icon: Users },
-  { path: "/settings", label: "Configurações", icon: Settings },
+  { path: "/",        label: "Chat IA",       icon: Terminal },
+  { path: "/todos",   label: "Tarefas",        icon: CheckSquare },
+  { path: "/habits",  label: "Hábitos",        icon: TrendingUp },
+  { path: "/calendar",label: "Calendário",     icon: Calendar },
+  { path: "/meetings",label: "Reuniões",       icon: Users },
+  { path: "/focus",   label: "Focus Log",      icon: Clock },
+  { path: "/settings",label: "Configurações",  icon: Settings },
 ];
 
 export function MainLayout() {
@@ -30,7 +31,8 @@ export function MainLayout() {
   const [mode, setMode] = useState<"work" | "break">("work");
   const [selectedTask, setSelectedTask] = useState("free");
   const [pomodoroToast, setPomodoroToast] = useState<{ icon: string; text: string } | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimer      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionStartRef = useRef<Date | null>(null);
   const [pomodoroItems, setPomodoroItems] = useState<PomodoroItem[]>([
     { value: "free", label: "Sessão Livre", kind: "free" },
   ]);
@@ -112,6 +114,22 @@ export function MainLayout() {
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification(title, { body, silent: true });
     }
+
+    // Save completed work session to DB (not breaks)
+    if (isWork && sessionStartRef.current) {
+      const endedAt   = new Date();
+      const startedAt = sessionStartRef.current;
+      sessionStartRef.current = null;
+      const label = pomodoroItems.find(i => i.value === selectedTask)?.label ?? "Sessão Livre";
+      db.pomodoro.add({
+        taskValue:    selectedTask,
+        taskLabel:    label,
+        date:         endedAt.toISOString().split("T")[0],
+        startedAt:    startedAt.toISOString().replace("T", " ").split(".")[0],
+        endedAt:      endedAt.toISOString().replace("T", " ").split(".")[0],
+        durationMins: Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 60000)),
+      }).catch(console.error);
+    }
   };
 
   useEffect(() => {
@@ -130,9 +148,16 @@ export function MainLayout() {
     return () => clearInterval(interval);
   }, [isRunning, timeLeft, mode]);
 
-  const toggleTimer = () => setIsRunning(!isRunning);
+  const toggleTimer = () => {
+    // Record start time only on first Start (not on Resume after pause)
+    if (!isRunning && sessionStartRef.current === null) {
+      sessionStartRef.current = new Date();
+    }
+    setIsRunning(prev => !prev);
+  };
   const resetTimer = () => {
     setIsRunning(false);
+    sessionStartRef.current = null;
     setTimeLeft(mode === "work" ? 25 * 60 : 5 * 60);
   };
   const switchMode = () => {

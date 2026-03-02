@@ -358,7 +358,39 @@ function createSchema() {
     CREATE INDEX IF NOT EXISTS idx_meetings_status  ON meetings(status);
     CREATE INDEX IF NOT EXISTS idx_messages_conv    ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+
+    -- ── Pomodoro Sessions ─────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+      id            TEXT PRIMARY KEY,
+      task_value    TEXT NOT NULL DEFAULT 'free',
+      task_label    TEXT NOT NULL DEFAULT 'Sessão Livre',
+      date          TEXT NOT NULL,
+      started_at    TEXT NOT NULL,
+      ended_at      TEXT NOT NULL,
+      duration_mins INTEGER NOT NULL DEFAULT 25,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_pomodoro_date ON pomodoro_sessions(date);
   `);
+}
+
+// ─── Pomodoro Sessions ───────────────────────────────────────────────────────
+
+function listPomodoroSessions(date) {
+  if (date) return _all(`SELECT * FROM pomodoro_sessions WHERE date = ? ORDER BY started_at ASC`, [date]);
+  return _all(`SELECT * FROM pomodoro_sessions ORDER BY date DESC, started_at ASC`);
+}
+
+function addPomodoroSession({ taskValue, taskLabel, date, startedAt, endedAt, durationMins }) {
+  const id = _generateId();
+  return _insertAndGet('pomodoro_sessions',
+    `INSERT INTO pomodoro_sessions (id,task_value,task_label,date,started_at,ended_at,duration_mins) VALUES (?,?,?,?,?,?,?)`,
+    [id, taskValue, taskLabel, date, startedAt, endedAt, durationMins],
+  );
+}
+
+function deletePomodoroSession(id) {
+  _run(`DELETE FROM pomodoro_sessions WHERE id = ?`, [id]);
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
@@ -659,4 +691,5 @@ module.exports = {
   getSetting, saveSetting,
   listConversations, createConversation, deleteConversation,
   getMessages, addMessage,
+  listPomodoroSessions, addPomodoroSession, deletePomodoroSession,
 };

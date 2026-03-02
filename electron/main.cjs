@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -315,6 +315,11 @@ function registerIPCHandlers() {
   ipcMain.handle('db:events:add',    (_, data)  => db.addEvent(data));
   ipcMain.handle('db:events:delete', (_, id)    => db.deleteEvent(id));
 
+  // Pomodoro Sessions
+  ipcMain.handle('db:pomodoro:list',   (_, date) => db.listPomodoroSessions(date));
+  ipcMain.handle('db:pomodoro:add',    (_, data) => db.addPomodoroSession(data));
+  ipcMain.handle('db:pomodoro:delete', (_, id)   => db.deletePomodoroSession(id));
+
   // AI Proxy
   ipcMain.handle('ai:chat', (_, messages, settings) => sendAIMessage(messages, settings));
 }
@@ -334,13 +339,13 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
     icon: path.join(__dirname, '../public/icon.png'),
+    frame: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#0d1117',
-      symbolColor: '#00ff41',
-      height: 40,
+      color: '#f8fafc',
+      symbolColor: '#475569',
+      height: 48,
     },
-    frame: false,
     show: false,
   });
 
@@ -359,6 +364,7 @@ function createWindow() {
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   await initDB();
   registerIPCHandlers();
   createWindow();
