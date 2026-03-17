@@ -1,194 +1,198 @@
-import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { db, CalendarEvent } from "../lib/db";
+import { useState, useEffect, useCallback } from "react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, Clock, AlignLeft, X } from "lucide-react";
+import { db, type CalendarEvent } from "../lib/db";
 
-// Map a DB row (scheduled_at = "YYYY-MM-DD HH:MM:SS") to display fields
-function toDisplayEvent(row: CalendarEvent): CalendarEvent & { date: string; time: string } {
+type DisplayEvent = CalendarEvent & { date: string; time: string };
+
+const MONTHS_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+const DAYS_PT   = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+function toDisplay(row: CalendarEvent): DisplayEvent {
   const [datePart, timePart] = (row.scheduled_at ?? "").split(" ");
-  return {
-    ...row,
-    date: datePart ?? "",
-    time: timePart ? timePart.slice(0, 5) : "", // "HH:MM"
-  };
+  return { ...row, date: datePart ?? "", time: timePart ? timePart.slice(0, 5) : "" };
+}
+
+function dateStr(y: number, m: number, d: number) {
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 export function CalendarView() {
-  const [events, setEvents] = useState<(CalendarEvent & { date: string; time: string })[]>([]);
+  const [events, setEvents]           = useState<DisplayEvent[]>([]);
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  // Add-event form
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [addDate, setAddDate]           = useState("");
+  const [newEvent, setNewEvent]         = useState({ title: "", time: "", description: "", color: "#22c55e" });
 
-  const [newEvent, setNewEvent] = useState({
-    title: "",
-    time: "",
-    description: "",
-    color: "#22c55e",
-  });
-
-  useEffect(() => {
-    db.events.list().then((rows) => setEvents(rows.map(toDisplayEvent)));
+  // ── Load / refresh ─────────────────────────────────────────────────────────
+  const load = useCallback(() => {
+    db.events.list().then(rows => setEvents(rows.map(toDisplay)));
   }, []);
 
-  const getDaysInMonth = (date: Date) => {
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
+  useEffect(() => {
+    load();
+    window.addEventListener("db-mutated", load);
+    return () => window.removeEventListener("db-mutated", load);
+  }, [load]);
 
-    return { daysInMonth, startingDayOfWeek };
+  // ── Calendar math ──────────────────────────────────────────────────────────
+  const y = currentDate.getFullYear();
+  const m = currentDate.getMonth();
+  const daysInMonth     = new Date(y, m + 1, 0).getDate();
+  const startingWeekday = new Date(y, m, 1).getDay(); // 0=Sun
+
+  const eventsForDay = (day: number) => {
+    const d = dateStr(y, m, day);
+    return events.filter(e => e.date === d).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
   };
 
-  const { daysInMonth, startingDayOfWeek } = getDaysInMonth(currentDate);
+  const selectedEvents = selectedDate ? events.filter(e => e.date === selectedDate).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99")) : [];
 
-  const previousMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1));
+  const isToday = (day: number) => {
+    const now = new Date();
+    return day === now.getDate() && m === now.getMonth() && y === now.getFullYear();
   };
 
-  const nextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1));
+  // ── Handlers ───────────────────────────────────────────────────────────────
+  const clickDay = (day: number) => {
+    const d = dateStr(y, m, day);
+    setSelectedDate(prev => (prev === d ? null : d));
   };
 
-  const getEventsForDate = (day: number) => {
-    const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    return events.filter((e) => e.date === dateStr);
-  };
-
-  const addEvent = async () => {
-    if (!selectedDate || !newEvent.title.trim()) return;
-
-    const dateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
-
-    const row = await db.events.add({
-      title: newEvent.title,
-      date: dateStr,
-      time: newEvent.time,
-      description: newEvent.description,
-      color: newEvent.color,
-    });
-
-    setEvents((prev) => [...prev, toDisplayEvent(row)]);
-    setShowAddModal(false);
+  const openAddFor = (date: string) => {
+    setAddDate(date);
     setNewEvent({ title: "", time: "", description: "", color: "#22c55e" });
-    setSelectedDate(null);
-  };
-
-  const deleteEvent = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    await db.events.delete(id);
-    setEvents((prev) => prev.filter((ev) => ev.id !== id));
-  };
-
-  const openAddModal = (day: number) => {
-    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-    setSelectedDate(date);
     setShowAddModal(true);
   };
 
+  const addEvent = async () => {
+    if (!addDate || !newEvent.title.trim()) return;
+    const row = await db.events.add({ ...newEvent, date: addDate });
+    setEvents(prev => [...prev, toDisplay(row)]);
+    setShowAddModal(false);
+    setSelectedDate(addDate);
+  };
+
+  const deleteEvent = async (id: string) => {
+    await db.events.delete(id);
+    setEvents(prev => prev.filter(e => e.id !== id));
+  };
+
+  const formatSelectedDate = () => {
+    if (!selectedDate) return "";
+    const [sy, sm, sd] = selectedDate.split("-").map(Number);
+    const dt = new Date(sy, sm - 1, sd);
+    return dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 bg-white min-h-screen">
       <div className="max-w-6xl mx-auto">
+
+        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-bold text-green-600 mb-2">$ calendar</h2>
-            <p className="text-sm text-slate-500">
-              Total Events: {events.length}
-            </p>
+            <h2 className="text-xl font-bold text-green-600 mb-1">$ calendário</h2>
+            <p className="text-sm text-slate-500">{events.length} evento{events.length !== 1 ? "s" : ""} cadastrado{events.length !== 1 ? "s" : ""}</p>
           </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={previousMonth}
-              className="p-2 bg-white border border-slate-200 rounded-xl text-green-600 hover:bg-slate-50 transition-all duration-300 transform hover:scale-105"
-            >
+          <div className="flex items-center gap-3">
+            <button onClick={() => setCurrentDate(new Date(y, m - 1))} className="p-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:border-green-400 hover:text-green-600 transition-all hover:scale-105">
               <ChevronLeft className="w-5 h-5" />
             </button>
-
-            <span className="text-slate-900 min-w-[200px] text-center font-medium">
-              {currentDate.toLocaleDateString("en-US", {
-                month: "long",
-                year: "numeric",
-              })}
+            <span className="text-slate-900 min-w-[180px] text-center font-semibold">
+              {MONTHS_PT[m]} {y}
             </span>
-
-            <button
-              onClick={nextMonth}
-              className="p-2 bg-white border border-slate-200 rounded-xl text-green-600 hover:bg-slate-50 transition-all duration-300 transform hover:scale-105"
-            >
+            <button onClick={() => setCurrentDate(new Date(y, m + 1))} className="p-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:border-green-400 hover:text-green-600 transition-all hover:scale-105">
               <ChevronRight className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => openAddFor(dateStr(y, m, new Date().getDate()))}
+              className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm rounded-xl transition-all hover:shadow-lg hover:shadow-green-500/30 hover:scale-105 active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              Novo evento
             </button>
           </div>
         </div>
 
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 shadow-xl">
-          <div className="grid grid-cols-7 gap-2 mb-2">
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-              <div
-                key={day}
-                className="text-center text-sm text-slate-600 font-medium py-2 border-b border-slate-200"
-              >
-                {day}
+        {/* Grid */}
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden shadow-xl">
+          {/* Day headers */}
+          <div className="grid grid-cols-7 border-b border-slate-200">
+            {DAYS_PT.map(d => (
+              <div key={d} className="text-center text-xs font-semibold text-slate-500 py-3 uppercase tracking-wide">
+                {d}
               </div>
             ))}
           </div>
 
-          <div className="grid grid-cols-7 gap-2">
-            {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-              <div key={`empty-${i}`} className="h-24" />
+          {/* Day cells */}
+          <div className="grid grid-cols-7">
+            {/* Empty cells before month start */}
+            {Array.from({ length: startingWeekday }).map((_, i) => (
+              <div key={`pre-${i}`} className="h-28 border-b border-r border-slate-100 bg-slate-50/50" />
             ))}
 
             {Array.from({ length: daysInMonth }).map((_, i) => {
-              const day = i + 1;
-              const dayEvents = getEventsForDate(day);
-              const isToday =
-                day === new Date().getDate() &&
-                currentDate.getMonth() === new Date().getMonth() &&
-                currentDate.getFullYear() === new Date().getFullYear();
+              const day        = i + 1;
+              const dayKey     = dateStr(y, m, day);
+              const dayEvts    = eventsForDay(day);
+              const today      = isToday(day);
+              const isSelected = selectedDate === dayKey;
+              const isLastRow  = Math.floor((startingWeekday + i) / 7) === Math.floor((startingWeekday + daysInMonth - 1) / 7);
 
               return (
                 <div
                   key={day}
-                  className={`h-24 bg-white border rounded-xl p-2 cursor-pointer hover:border-green-400 transition-all duration-300 transform hover:scale-105 ${
-                    isToday ? "border-green-500 shadow-lg shadow-green-500/20" : "border-slate-200"
-                  }`}
-                  onClick={() => openAddModal(day)}
+                  onClick={() => clickDay(day)}
+                  className={`h-28 border-slate-100 cursor-pointer transition-all duration-150 relative
+                    ${!isLastRow ? "border-b" : ""}
+                    ${(startingWeekday + i) % 7 !== 6 ? "border-r" : ""}
+                    ${isSelected ? "bg-green-50 ring-2 ring-inset ring-green-400" : "bg-white hover:bg-slate-50/80"}
+                  `}
                 >
-                  <div className="flex justify-between items-start mb-1">
-                    <span className={`text-sm ${isToday ? "text-green-600 font-bold" : "text-slate-600"}`}>
+                  {/* Day number */}
+                  <div className="flex items-center justify-between px-2 pt-2 pb-1">
+                    <span className={`text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full transition-all ${
+                      today
+                        ? "bg-green-500 text-white font-bold"
+                        : isSelected
+                          ? "text-green-700 font-semibold"
+                          : "text-slate-600"
+                    }`}>
                       {day}
                     </span>
-                    {dayEvents.length > 0 && (
-                      <span className="text-xs bg-green-500 text-white px-1.5 py-0.5 rounded-full">
-                        {dayEvents.length}
+                    {dayEvts.length > 0 && (
+                      <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">
+                        {dayEvts.length}
                       </span>
                     )}
                   </div>
 
-                  <div className="space-y-1">
-                    {dayEvents.slice(0, 2).map((event) => (
+                  {/* Event chips (max 3) */}
+                  <div className="px-1.5 space-y-0.5">
+                    {dayEvts.slice(0, 3).map(ev => (
                       <div
-                        key={event.id}
-                        className="text-xs text-slate-900 bg-slate-50 px-1 py-0.5 rounded truncate flex items-center justify-between gap-1"
-                        style={{ borderLeft: `2px solid ${event.color ?? "#22c55e"}` }}
+                        key={ev.id}
+                        className="text-[10px] px-1.5 py-0.5 rounded truncate font-medium"
+                        style={{
+                          backgroundColor: (ev.color ?? "#22c55e") + "22",
+                          borderLeft: `2px solid ${ev.color ?? "#22c55e"}`,
+                          color: "#1e293b",
+                        }}
                       >
-                        <span className="truncate">
-                          {event.time && <span className="opacity-60">{event.time} </span>}
-                          {event.title}
-                        </span>
-                        <button
-                          onClick={(e) => deleteEvent(event.id, e)}
-                          className="shrink-0 opacity-50 hover:opacity-100 text-red-500 leading-none"
-                          title="Remove event"
-                        >
-                          ×
-                        </button>
+                        {ev.time && <span className="opacity-60 mr-0.5">{ev.time}</span>}
+                        {ev.title}
                       </div>
                     ))}
-                    {dayEvents.length > 2 && (
-                      <div className="text-xs text-slate-500">
-                        +{dayEvents.length - 2} more
-                      </div>
+                    {dayEvts.length > 3 && (
+                      <div className="text-[10px] text-slate-400 px-1.5">+{dayEvts.length - 3} mais</div>
                     )}
                   </div>
                 </div>
@@ -197,56 +201,130 @@ export function CalendarView() {
           </div>
         </div>
 
+        {/* Day detail panel */}
+        {selectedDate && (
+          <div className="mt-4 bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <p className="text-sm font-semibold text-slate-800 capitalize">{formatSelectedDate()}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{selectedEvents.length} evento{selectedEvents.length !== 1 ? "s" : ""}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openAddFor(selectedDate)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-xs rounded-xl transition-all hover:shadow-md hover:scale-105 active:scale-95"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Adicionar
+                </button>
+                <button onClick={() => setSelectedDate(null)} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {selectedEvents.length === 0 ? (
+              <div className="px-5 py-8 text-center text-slate-400 text-sm">
+                Nenhum evento neste dia.
+                <button onClick={() => openAddFor(selectedDate)} className="block mx-auto mt-2 text-green-600 hover:text-green-700 font-medium text-xs">
+                  + Criar evento
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {selectedEvents.map(ev => (
+                  <div key={ev.id} className="flex items-start gap-3 px-5 py-3 hover:bg-slate-50 transition-colors group">
+                    {/* Color dot */}
+                    <div className="mt-1 w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: ev.color ?? "#22c55e" }} />
+
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-slate-800 truncate">{ev.title}</p>
+                      <div className="flex items-center gap-3 mt-0.5">
+                        {ev.time && ev.time !== "00:00" && (
+                          <span className="flex items-center gap-1 text-xs text-slate-500">
+                            <Clock className="w-3 h-3" />
+                            {ev.time}
+                          </span>
+                        )}
+                        {ev.description && (
+                          <span className="flex items-center gap-1 text-xs text-slate-400 truncate max-w-xs">
+                            <AlignLeft className="w-3 h-3 shrink-0" />
+                            {ev.description}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => deleteEvent(ev.id)}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 text-red-400 hover:text-red-600 rounded-lg transition-all"
+                      title="Remover evento"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Add event modal */}
         {showAddModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-              <h3 className="text-lg font-bold text-green-600 mb-4">
-                Add Event - {selectedDate?.toLocaleDateString()}
-              </h3>
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-base font-bold text-green-600">
+                  Novo evento — {addDate ? new Date(addDate + "T12:00").toLocaleDateString("pt-BR", { day: "numeric", month: "long" }) : ""}
+                </h3>
+                <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-700 transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm text-slate-600 font-medium block mb-2">Title</label>
+                  <label className="text-xs text-slate-600 font-medium block mb-1.5">Título *</label>
                   <input
+                    autoFocus
                     type="text"
                     value={newEvent.title}
-                    onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all duration-300"
-                    placeholder="Event title..."
+                    onChange={e => setNewEvent({ ...newEvent, title: e.target.value })}
+                    onKeyDown={e => e.key === "Enter" && addEvent()}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all"
+                    placeholder="Nome do evento..."
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm text-slate-600 font-medium block mb-2">Time</label>
+                  <label className="text-xs text-slate-600 font-medium block mb-1.5">Horário</label>
                   <input
                     type="time"
                     value={newEvent.time}
-                    onChange={(e) => setNewEvent({ ...newEvent, time: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all duration-300"
+                    onChange={e => setNewEvent({ ...newEvent, time: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-green-500 font-mono transition-all"
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm text-slate-600 font-medium block mb-2">Description</label>
+                  <label className="text-xs text-slate-600 font-medium block mb-1.5">Descrição</label>
                   <textarea
                     value={newEvent.description}
-                    onChange={(e) => setNewEvent({ ...newEvent, description: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono resize-none transition-all duration-300"
-                    rows={3}
-                    placeholder="Event description..."
+                    onChange={e => setNewEvent({ ...newEvent, description: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-green-500 font-mono resize-none transition-all"
+                    rows={2}
+                    placeholder="Detalhes do evento..."
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm text-slate-600 font-medium block mb-2">Color</label>
+                  <label className="text-xs text-slate-600 font-medium block mb-2">Cor</label>
                   <div className="flex gap-2">
-                    {["#22c55e", "#ef4444", "#3b82f6", "#eab308", "#ec4899"].map((color) => (
+                    {["#22c55e", "#ef4444", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899"].map(color => (
                       <button
                         key={color}
                         onClick={() => setNewEvent({ ...newEvent, color })}
-                        className={`w-8 h-8 rounded-full border-2 transition-all duration-300 transform hover:scale-110 ${
-                          newEvent.color === color ? "border-slate-900 scale-110" : "border-slate-200"
-                        }`}
+                        className={`w-7 h-7 rounded-full border-2 transition-all hover:scale-110 ${newEvent.color === color ? "border-slate-700 scale-110" : "border-white shadow"}`}
                         style={{ backgroundColor: color }}
                       />
                     ))}
@@ -257,24 +335,22 @@ export function CalendarView() {
               <div className="flex gap-3 mt-6">
                 <button
                   onClick={addEvent}
-                  className="flex-1 px-4 py-2 bg-green-500 rounded-xl text-white hover:bg-green-600 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-300 transform hover:scale-105 active:scale-95"
+                  disabled={!newEvent.title.trim()}
+                  className="flex-1 px-4 py-2.5 bg-green-500 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-xl transition-all hover:shadow-lg hover:shadow-green-500/30 hover:scale-105 active:scale-95"
                 >
-                  Add Event
+                  Salvar evento
                 </button>
                 <button
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setNewEvent({ title: "", time: "", description: "", color: "#22c55e" });
-                    setSelectedDate(null);
-                  }}
-                  className="flex-1 px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-all duration-300 transform hover:scale-105 active:scale-95"
+                  onClick={() => setShowAddModal(false)}
+                  className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm rounded-xl transition-all hover:scale-105 active:scale-95"
                 >
-                  Cancel
+                  Cancelar
                 </button>
               </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

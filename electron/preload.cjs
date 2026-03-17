@@ -62,4 +62,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ai: {
     chat: (messages, settings) => ipcRenderer.invoke('ai:chat', messages, settings),
   },
+
+  // ── iCal fetch/sync (via main process — sem CORS) ─────────────────────────
+  ical: {
+    fetch: (url) => {
+      if (typeof url !== 'string' || url.length > 2048) throw new Error('URL inválida');
+      return ipcRenderer.invoke('ical:fetch', url);
+    },
+    sync: (url, source, color) => {
+      if (typeof url !== 'string' || url.length > 2048) throw new Error('URL inválida');
+      if (!['ical:google', 'ical:outlook'].includes(source))  throw new Error('Source inválido');
+      if (typeof color !== 'string' || !/^#[0-9A-Fa-f]{6}$/.test(color)) throw new Error('Cor inválida');
+      return ipcRenderer.invoke('ical:sync', url, source, color);
+    },
+  },
 });

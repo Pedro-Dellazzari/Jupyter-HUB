@@ -187,6 +187,10 @@ declare global {
       ai: {
         chat: (messages: AIMessage[], settings: APISettings) => Promise<AIResponse>;
       };
+      ical: {
+        fetch: (url: string) => Promise<{ text?: string; error?: string }>;
+        sync:  (url: string, source: string, color: string) => Promise<{ found?: number; imported?: number; error?: string }>;
+      };
     };
   }
 }
@@ -254,5 +258,10 @@ export const db = {
   ai: {
     chat: (messages: AIMessage[], settings: APISettings) =>
       api.ai.chat(messages, settings),
+  },
+
+  ical: {
+    fetch: (url: string) => api.ical.fetch(url),
+    sync:  (url: string, source: string, color: string) => api.ical.sync(url, source, color),
   },
 };

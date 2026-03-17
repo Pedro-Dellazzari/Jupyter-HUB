@@ -309,6 +309,292 @@ async function sendAIMessage(messages, settings) {
   }
 }
 
+// ─── iCal Parser (RFC 5545) ───────────────────────────────────────────────────
+
+function _unescapeICal(str) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/\\n/g, '\n').replace(/\\N/g, '\n')
+    .replace(/\\,/g, ',').replace(/\\;/g, ';')
+    .replace(/\\\\/g, '\\')
+    // Strip null bytes and non-printable control characters
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+/**
+ * Parse a DTSTART/DTEND/UNTIL value string and optional TZID param.
+ * Returns { date: "YYYY-MM-DD", time: "HH:MM", allDay: bool } or null.
+ */
+function _parseDTValue(dtValue, tzid) {
+  if (!dtValue) return null;
+  dtValue = dtValue.trim();
+
+  // All-day: YYYYMMDD (no T component)
+  if (/^\d{8}$/.test(dtValue)) {
+    return {
+      date: `${dtValue.slice(0,4)}-${dtValue.slice(4,6)}-${dtValue.slice(6,8)}`,
+      time: '00:00',
+      allDay: true,
+    };
+  }
+
+  // Date-time: YYYYMMDDTHHMMSS[Z]
+  const m = dtValue.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  if (!m) return null;
+
+  const [, year, month, day, hour, min, , utcZ] = m;
+
+  if (utcZ === 'Z') {
+    // UTC — convert to system local time via Date object
+    const utcDate = new Date(Date.UTC(
+      parseInt(year), parseInt(month) - 1, parseInt(day),
+      parseInt(hour), parseInt(min), 0,
+    ));
+    return {
+      date: `${utcDate.getFullYear()}-${String(utcDate.getMonth()+1).padStart(2,'0')}-${String(utcDate.getDate()).padStart(2,'0')}`,
+      time: `${String(utcDate.getHours()).padStart(2,'0')}:${String(utcDate.getMinutes()).padStart(2,'0')}`,
+      allDay: false,
+    };
+  }
+
+  // Local time (TZID or floating) — treat as-is
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${min}`,
+    allDay: false,
+  };
+}
+
+/**
+ * Expand a RRULE string from a start occurrence for the next `daysAhead` days.
+ * Returns array of { date, time, allDay }.
+ */
+function _expandRRule(rruleStr, startParsed, daysAhead) {
+  const params = {};
+  for (const part of rruleStr.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq !== -1) params[part.slice(0, eq)] = part.slice(eq + 1);
+  }
+
+  const freq = params['FREQ'];
+  if (!freq) return [];
+
+  const interval = parseInt(params['INTERVAL'] || '1');
+  const maxCount = params['COUNT'] ? parseInt(params['COUNT']) : null;
+
+  let untilDate = null;
+  if (params['UNTIL']) {
+    const u = _parseDTValue(params['UNTIL'], '');
+    if (u) untilDate = new Date(`${u.date}T${u.time}:00`);
+  }
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const horizon = new Date(); horizon.setDate(horizon.getDate() + daysAhead);
+
+  const startDate = new Date(`${startParsed.date}T${startParsed.time || '00:00'}:00`);
+  const occurrences = [];
+  let n = 0;
+  const MAX      = 200;
+  const deadline = Date.now() + 2000; // 2 s max per rule
+
+  const _fmt = (d) => {
+    const y  = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const dy = String(d.getDate()).padStart(2, '0');
+    const h  = startParsed.allDay ? '00' : String(d.getHours()).padStart(2, '0');
+    const mi = startParsed.allDay ? '00' : String(d.getMinutes()).padStart(2, '0');
+    return { date: `${y}-${mo}-${dy}`, time: `${h}:${mi}`, allDay: startParsed.allDay };
+  };
+
+  const _tryAdd = (d) => {
+    if (d < startDate || d > horizon) return false;
+    if (untilDate && d > untilDate) return false;
+    if (maxCount !== null && n >= maxCount) return false;
+    n++;
+    if (d >= today) occurrences.push(_fmt(d));
+    return true;
+  };
+
+  // WEEKLY + BYDAY: e.g. RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR
+  const DAY_MAP = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+  if (freq === 'WEEKLY' && params['BYDAY']) {
+    const targetDows = params['BYDAY'].split(',')
+      .map(d => { const m2 = d.match(/([A-Z]{2})$/); return m2 ? DAY_MAP[m2[1]] : -1; })
+      .filter(d => d >= 0)
+      .sort((a, b) => a - b);
+
+    if (targetDows.length > 0) {
+      let weekBase = new Date(startDate);
+      while (weekBase <= horizon && n < MAX && Date.now() < deadline) {
+        // Sunday of this week
+        const sunday = new Date(weekBase);
+        sunday.setDate(weekBase.getDate() - weekBase.getDay());
+        sunday.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
+
+        for (const dow of targetDows) {
+          const d = new Date(sunday);
+          d.setDate(sunday.getDate() + dow);
+          _tryAdd(d);
+          if (maxCount !== null && n >= maxCount) break;
+        }
+
+        weekBase.setDate(weekBase.getDate() + 7 * interval);
+      }
+      return occurrences;
+    }
+  }
+
+  // Generic: DAILY / WEEKLY (no BYDAY) / MONTHLY / YEARLY
+  let current = new Date(startDate);
+  while (current <= horizon && n < MAX && Date.now() < deadline) {
+    _tryAdd(current);
+    if (maxCount !== null && n >= maxCount) break;
+
+    if      (freq === 'DAILY')   current.setDate(current.getDate() + interval);
+    else if (freq === 'WEEKLY')  current.setDate(current.getDate() + 7 * interval);
+    else if (freq === 'MONTHLY') current.setMonth(current.getMonth() + interval);
+    else if (freq === 'YEARLY')  current.setFullYear(current.getFullYear() + interval);
+    else break;
+  }
+
+  return occurrences;
+}
+
+/**
+ * Parse an iCal text and return an array of event objects.
+ * Fixes: line folding, UTC conversion, CANCELLED filtering, escaped chars, RRULE expansion.
+ */
+function _parseICalEvents(rawText) {
+  // 1. Unfold continuation lines (RFC 5545 §3.1)
+  const text = rawText
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n[ \t]/g, '');  // fold character is CRLF + SPACE or TAB
+
+  const results = [];
+  const blocks = text.split('BEGIN:VEVENT');
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i];
+
+    // 2. Skip CANCELLED / DECLINED events
+    const statusM = block.match(/^STATUS:(.+)$/m);
+    if (statusM) {
+      const s = statusM[1].trim().toUpperCase();
+      if (s === 'CANCELLED' || s === 'DECLINED') continue;
+    }
+
+    // 3. SUMMARY
+    const summaryM = block.match(/^SUMMARY(?:;[^:]*)?:(.+)$/m);
+    const summary = summaryM ? _unescapeICal(summaryM[1].trim()) : '';
+    if (!summary) continue;
+
+    // 4. DTSTART  (param may include TZID=... or VALUE=DATE)
+    const dtStartM = block.match(/^DTSTART(?:;([^:]*))?:(.+)$/m);
+    if (!dtStartM) continue;
+    const tzid  = dtStartM[1] || '';
+    const dtVal = dtStartM[2].trim();
+    const parsed = _parseDTValue(dtVal, tzid);
+    if (!parsed) continue;
+
+    // 5. DESCRIPTION
+    const descM = block.match(/^DESCRIPTION(?:;[^:]*)?:(.+)$/m);
+    const description = descM ? _unescapeICal(descM[1].trim()).slice(0, 300) : '';
+
+    // 6. RRULE — expand recurring events for the next 90 days
+    const rruleM = block.match(/^RRULE:(.+)$/m);
+    if (rruleM) {
+      const occs = _expandRRule(rruleM[1].trim(), parsed, 90);
+      for (const occ of occs) {
+        results.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
+      }
+    } else {
+      results.push({ title: summary, date: parsed.date, time: parsed.time, description, allDay: parsed.allDay });
+    }
+  }
+
+  return results;
+}
+
+// ─── iCal Security Helpers ────────────────────────────────────────────────────
+
+const _ICAL_MAX_BYTES    = 5_000_000;  // 5 MB
+const _SYNC_COOLDOWN_MS  = 30_000;     // 30 s between syncs per source
+const _FETCH_TIMEOUT_MS  = 15_000;     // 15 s HTTP timeout
+const _syncLastTime      = {};
+
+/**
+ * Validates an iCal URL.
+ * Blocks non-HTTPS protocols and private/internal IP ranges (SSRF prevention).
+ * Throws an Error with a user-facing message if invalid.
+ */
+function _validateICalURL(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('URL inválida. Use o formato: https://...');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Apenas URLs HTTPS são permitidas.');
+  }
+
+  const host = parsed.hostname.toLowerCase();
+
+  // Block loopback
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1') {
+    throw new Error('Acesso a endereços internos não é permitido.');
+  }
+
+  // Block link-local metadata endpoint (AWS/GCP/Azure)
+  if (host === '169.254.169.254' || host === 'metadata.google.internal') {
+    throw new Error('Acesso a serviços de metadados não é permitido.');
+  }
+
+  // Block private IPv4 ranges expressed as literals
+  const PRIVATE_IPV4 = [
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+    /^192\.168\.\d{1,3}\.\d{1,3}$/,
+    /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+    /^169\.254\.\d{1,3}\.\d{1,3}$/,
+    /^0\.0\.0\.0$/,
+  ];
+  if (PRIVATE_IPV4.some(re => re.test(host))) {
+    throw new Error('Acesso a redes privadas/internas não é permitido.');
+  }
+}
+
+/**
+ * Fetches a URL with a hard timeout and a response-size cap.
+ * Returns the text body, or throws on error/timeout/oversize.
+ */
+async function _fetchICalText(url) {
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), _FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'JupyterHUB/1.0 (iCal sync)' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+
+    // Reject by Content-Length header before reading body
+    const clHeader = parseInt(res.headers.get('content-length') || '0', 10);
+    if (clHeader > _ICAL_MAX_BYTES) {
+      throw new Error('Arquivo iCal muito grande (máx. 5 MB).');
+    }
+
+    const text = await res.text();
+    if (text.length > _ICAL_MAX_BYTES) {
+      throw new Error('Arquivo iCal muito grande (máx. 5 MB).');
+    }
+    return text;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
 
 function registerIPCHandlers() {
@@ -357,6 +643,54 @@ function registerIPCHandlers() {
 
   // AI Proxy
   ipcMain.handle('ai:chat', (_, messages, settings) => sendAIMessage(messages, settings));
+
+  // iCal fetch — runs in main process to bypass CORS
+  ipcMain.handle('ical:fetch', async (_, url) => {
+    try {
+      _validateICalURL(url);                              // SSRF guard
+      const text = await _fetchICalText(url);             // timeout + size limit
+      if (!text.includes('BEGIN:VCALENDAR')) {
+        return { error: 'URL não retornou um arquivo iCal válido. Verifique o link.' };
+      }
+      return { text };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+
+  // iCal sync — fetch + parse (RFC 5545) + full-refresh import
+  ipcMain.handle('ical:sync', async (_, url, source, color) => {
+    try {
+      // ── Rate limiting ──────────────────────────────────────────────────────
+      const now = Date.now();
+      if (_syncLastTime[source] && now - _syncLastTime[source] < _SYNC_COOLDOWN_MS) {
+        const wait = Math.ceil((_SYNC_COOLDOWN_MS - (now - _syncLastTime[source])) / 1000);
+        return { error: `Aguarde ${wait}s antes de sincronizar novamente.` };
+      }
+
+      // ── Input validation ───────────────────────────────────────────────────
+      _validateICalURL(url);                              // SSRF guard
+      if (typeof source !== 'string' || !['ical:google', 'ical:outlook'].includes(source)) {
+        return { error: 'Fonte inválida.' };
+      }
+      if (typeof color !== 'string' || !/^#[0-9A-Fa-f]{6}$/.test(color)) {
+        return { error: 'Cor inválida.' };
+      }
+
+      // ── Fetch + parse ──────────────────────────────────────────────────────
+      const rawText = await _fetchICalText(url);          // timeout + size limit
+      if (!rawText.includes('BEGIN:VCALENDAR')) {
+        return { error: 'URL não retornou um arquivo iCal válido. Verifique o link.' };
+      }
+
+      _syncLastTime[source] = Date.now();                 // stamp only on successful fetch
+      const events   = _parseICalEvents(rawText);
+      const imported = db.syncEvents(source, color, events);
+      return { found: events.length, imported };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
 }
 
 // ─── Window ──────────────────────────────────────────────────────────────────
@@ -369,8 +703,10 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0a0e17',
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration:         false,   // no Node APIs in renderer
+      contextIsolation:        true,    // preload runs in isolated world
+      webSecurity:             true,    // enforce same-origin (explicit)
+      allowRunningInsecureContent: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
     icon: path.join(__dirname, '../public/icon.png'),
@@ -385,6 +721,21 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
+
+  // Block renderer from navigating away from the app or opening external URLs
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowedOrigins = isDev
+      ? ['http://localhost:5173']
+      : [`file://${path.join(__dirname, '../dist')}`];
+    const isAllowed = allowedOrigins.some(origin => url.startsWith(origin));
+    if (!isAllowed) {
+      event.preventDefault();
+      console.warn('[security] Blocked navigation to external URL:', url.slice(0, 80));
+    }
+  });
+
+  // Block new windows / window.open() from the renderer
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');

@@ -670,13 +670,13 @@ function listEvents() {
 }
 
 function addEvent(data) {
-  const { title, date, time, description, color } = data;
-  const scheduledAt = time ? `${date} ${time}:00` : `${date} 00:00:00`;
+  const { title, date, time, description, color, source = 'manual', allDay = false } = data;
+  const scheduledAt = (time && time !== '00:00') ? `${date} ${time}:00` : `${date} 00:00:00`;
   const id = _generateId();
   return _insertAndGet('events',
-    `INSERT INTO events (id, title, scheduled_at, description, color, type, priority)
-     VALUES (?, ?, ?, ?, ?, 'appointment', 'medium')`,
-    [id, title, scheduledAt, description || null, color || null],
+    `INSERT INTO events (id, title, scheduled_at, description, color, type, priority, source, all_day)
+     VALUES (?, ?, ?, ?, ?, 'appointment', 'medium', ?, ?)`,
+    [id, title, scheduledAt, description || null, color || null, source, allDay ? 1 : 0],
   );
 }
 
@@ -684,12 +684,49 @@ function deleteEvent(id) {
   _run(`UPDATE events SET deleted_at = datetime('now') WHERE id = ?`, [id]);
 }
 
+/**
+ * Full-refresh sync: soft-deletes all events from the given source,
+ * then bulk-inserts the new events array. Single _save() at the end.
+ * Returns the count of inserted events.
+ */
+function syncEvents(source, color, events) {
+  _runNoSave(
+    `UPDATE events SET deleted_at = datetime('now') WHERE source = ? AND deleted_at IS NULL`,
+    [source],
+  );
+
+  const _validDate = /^\d{4}-\d{2}-\d{2}$/;
+  const _validTime = /^\d{2}:\d{2}$/;
+
+  let count = 0;
+  for (const ev of events) {
+    const { title, description, allDay = false } = ev;
+    let { date, time } = ev;
+
+    // Validate and sanitize date/time formats before string interpolation
+    if (!_validDate.test(date)) continue;                  // skip event with bad date
+    if (!time || !_validTime.test(time)) time = '00:00';   // fall back to midnight
+
+    const scheduledAt = (time !== '00:00') ? `${date} ${time}:00` : `${date} 00:00:00`;
+    const id = _generateId();
+    _runNoSave(
+      `INSERT INTO events (id, title, scheduled_at, description, color, type, priority, source, all_day)
+       VALUES (?, ?, ?, ?, ?, 'appointment', 'medium', ?, ?)`,
+      [id, title, scheduledAt, description || null, color || null, source, allDay ? 1 : 0],
+    );
+    count++;
+  }
+
+  _save();
+  return count;
+}
+
 module.exports = {
   initDatabase,
   listTasks, addTask, toggleTask, deleteTask,
   listHabits, addHabit, deleteHabit, toggleHabitToday,
   listMeetings, addMeeting, deleteMeeting,
-  listEvents, addEvent, deleteEvent,
+  listEvents, addEvent, deleteEvent, syncEvents,
   getSetting, saveSetting,
   listConversations, createConversation, deleteConversation,
   getMessages, addMessage,
