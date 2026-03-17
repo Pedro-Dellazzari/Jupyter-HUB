@@ -8,10 +8,15 @@ export function TodosPanel() {
   const [priority, setPriority] = useState<"low" | "medium" | "high">("medium");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadTodos = () =>
     db.tasks.list()
       .then(setTodos)
       .catch(err => setError(`Erro ao carregar tasks: ${err?.message ?? err}`));
+
+  useEffect(() => {
+    loadTodos();
+    window.addEventListener("db-mutated", loadTodos);
+    return () => window.removeEventListener("db-mutated", loadTodos);
   }, []);
 
   const addTodo = async () => {

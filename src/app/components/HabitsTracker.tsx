@@ -7,8 +7,12 @@ export function HabitsTracker() {
   const [newHabit, setNewHabit] = useState("");
   const [frequency, setFrequency] = useState<"daily" | "weekly" | "monthly">("daily");
 
+  const loadHabits = () => db.habits.list().then(setHabits);
+
   useEffect(() => {
-    db.habits.list().then(setHabits);
+    loadHabits();
+    window.addEventListener("db-mutated", loadHabits);
+    return () => window.removeEventListener("db-mutated", loadHabits);
   }, []);
 
   const addHabit = async () => {

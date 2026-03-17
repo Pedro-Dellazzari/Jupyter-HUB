@@ -415,7 +415,7 @@ function addTask(title, priority = 'medium') {
 
 function toggleTask(id) {
   const task = _get('SELECT status FROM tasks WHERE id = ?', [id]);
-  if (!task) return null;
+  if (!task) return { error: 'not_found', message: `Tarefa com ID "${id}" não encontrada. Use list_tasks para obter os IDs corretos.` };
 
   if (task.status === 'done') {
     _runNoSave(
@@ -488,7 +488,8 @@ function toggleHabitToday(habitId) {
     _save(); // single save for the whole toggle operation
     return false;
   } else {
-    _runNoSave(`INSERT INTO habit_logs (habit_id, logged_date) VALUES (?, ?)`, [habitId, today]);
+    const logId = _generateId();
+    _runNoSave(`INSERT INTO habit_logs (id, habit_id, logged_date) VALUES (?, ?, ?)`, [logId, habitId, today]);
     _updateStreakNoSave(habitId);
     _save(); // single save for the whole toggle operation
     return true;
@@ -575,9 +576,10 @@ function addMeeting(data) {
   if (participants && participants.length > 0) {
     for (const p of participants) {
       const isEmail = p.includes('@');
+      const participantId = _generateId();
       _runNoSave(
-        `INSERT INTO meeting_participants (meeting_id, name, email) VALUES (?, ?, ?)`,
-        [meetingId, p, isEmail ? p : null],
+        `INSERT INTO meeting_participants (id, meeting_id, name, email) VALUES (?, ?, ?, ?)`,
+        [participantId, meetingId, p, isEmail ? p : null],
       );
     }
   }

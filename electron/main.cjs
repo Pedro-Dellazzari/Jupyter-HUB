@@ -36,8 +36,8 @@ const TOOLS_SCHEMA = [
   },
   {
     name: 'toggle_task',
-    description: 'Conclui uma tarefa pendente, ou reabre uma tarefa já concluída',
-    parameters: { type: 'object', properties: { id: { type: 'string', description: 'ID da tarefa' } }, required: ['id'] },
+    description: 'Conclui uma tarefa pendente, ou reabre uma tarefa já concluída. IMPORTANTE: chame list_tasks primeiro para obter o ID correto da tarefa.',
+    parameters: { type: 'object', properties: { id: { type: 'string', description: 'ID exato da tarefa, obtido via list_tasks' } }, required: ['id'] },
   },
   {
     name: 'delete_task',
@@ -51,8 +51,8 @@ const TOOLS_SCHEMA = [
   },
   {
     name: 'toggle_habit_today',
-    description: 'Marca um hábito como concluído hoje, ou desmarca se já estava marcado',
-    parameters: { type: 'object', properties: { id: { type: 'string', description: 'ID do hábito' } }, required: ['id'] },
+    description: 'Marca um hábito como concluído hoje, ou desmarca se já estava marcado. IMPORTANTE: chame list_habits primeiro para obter o ID correto do hábito.',
+    parameters: { type: 'object', properties: { id: { type: 'string', description: 'ID exato do hábito, obtido via list_habits' } }, required: ['id'] },
   },
   {
     name: 'list_meetings',
@@ -110,32 +110,65 @@ function buildGeminiTools() {
   return [{ function_declarations: TOOLS_SCHEMA.map(t => ({ name: t.name, description: t.description, parameters: t.parameters })) }];
 }
 
-async function executeTool(name, input) {
+async function executeTool(name, input, mutations) {
   switch (name) {
     case 'list_tasks':         return db.listTasks();
-    case 'create_task':        return db.addTask(input.title, input.priority || 'medium');
-    case 'toggle_task':        return db.toggleTask(input.id);
-    case 'delete_task':        return db.deleteTask(input.id);
+    case 'create_task': {
+      const task = db.addTask(input.title, input.priority || 'medium');
+      mutations.push({ type: 'task_created', id: task.id, title: task.title });
+      return task;
+    }
+    case 'toggle_task': {
+      const result = db.toggleTask(input.id);
+      if (!result || result.error) {
+        const tasks = db.listTasks();
+        return { error: `Tarefa com ID "${input.id}" não encontrada.`, available_tasks: tasks.map(t => ({ id: t.id, title: t.title, status: t.status })) };
+      }
+      mutations.push({ type: 'task_toggled', id: result.id, title: result.title, status: result.status });
+      return result;
+    }
+    case 'delete_task': {
+      db.deleteTask(input.id);
+      mutations.push({ type: 'task_deleted', id: input.id });
+      return { success: true };
+    }
     case 'list_habits':        return db.listHabits();
-    case 'toggle_habit_today': return db.toggleHabitToday(input.id);
+    case 'toggle_habit_today': {
+      const habits = db.listHabits();
+      const habit = habits.find(h => h.id === input.id);
+      if (!habit) {
+        return { error: `Hábito com ID "${input.id}" não encontrado.`, available_habits: habits.map(h => ({ id: h.id, title: h.title })) };
+      }
+      const done = db.toggleHabitToday(input.id);
+      mutations.push({ type: 'habit_toggled', id: input.id, title: habit.title, marked_today: done });
+      return { success: true, habit_id: input.id, title: habit.title, marked_today: done };
+    }
     case 'list_meetings':      return db.listMeetings();
-    case 'create_meeting':     return db.addMeeting({
-      title: input.title, date: input.date, time: input.time,
-      duration: input.duration || 60, participants: input.participants || [],
-      location: input.location || '', type: 'in-person', notes: input.notes || '',
-    });
+    case 'create_meeting': {
+      const meeting = db.addMeeting({
+        title: input.title, date: input.date, time: input.time,
+        duration: input.duration || 60, participants: input.participants || [],
+        location: input.location || '', type: 'in-person', notes: input.notes || '',
+      });
+      mutations.push({ type: 'meeting_created', id: meeting.id, title: meeting.title, start_at: meeting.start_at });
+      return meeting;
+    }
     case 'list_events':        return db.listEvents();
-    case 'create_event':       return db.addEvent({
-      title: input.title, date: input.date, time: input.time || '',
-      description: input.description || '', color: input.color || '#22c55e',
-    });
+    case 'create_event': {
+      const event = db.addEvent({
+        title: input.title, date: input.date, time: input.time || '',
+        description: input.description || '', color: input.color || '#22c55e',
+      });
+      mutations.push({ type: 'event_created', id: event.id, title: event.title });
+      return event;
+    }
     default: return { error: `Ferramenta desconhecida: ${name}` };
   }
 }
 
 // ─── Provider handlers (with tool-calling loops) ──────────────────────────────
 
-async function _callOpenAICompatible(url, apiKey, model, temperature, maxTokens, messages, useTools) {
+async function _callOpenAICompatible(url, apiKey, model, temperature, maxTokens, messages, useTools, mutations) {
   const tools = useTools ? buildOpenAITools() : undefined;
   const msgs  = [...messages];
 
@@ -155,17 +188,17 @@ async function _callOpenAICompatible(url, apiKey, model, temperature, maxTokens,
     if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls?.length) {
       msgs.push(choice.message);
       for (const call of choice.message.tool_calls) {
-        const result = await executeTool(call.function.name, JSON.parse(call.function.arguments));
+        const result = await executeTool(call.function.name, JSON.parse(call.function.arguments), mutations);
         msgs.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
       }
     } else {
-      return { content: choice.message.content, model: data.model, tokensUsed: data.usage?.total_tokens };
+      return { content: choice.message.content, model: data.model, tokensUsed: data.usage?.total_tokens, mutations };
     }
   }
   return { error: 'Limite de rounds de tool calls atingido.', content: '', model };
 }
 
-async function _callAnthropic(apiKey, model, temperature, maxTokens, messages) {
+async function _callAnthropic(apiKey, model, temperature, maxTokens, messages, mutations) {
   const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
   let chatMsgs = messages.filter(m => m.role !== 'system');
   while (chatMsgs.length > 0 && chatMsgs[0].role !== 'user') chatMsgs = chatMsgs.slice(1);
@@ -195,7 +228,7 @@ async function _callAnthropic(apiKey, model, temperature, maxTokens, messages) {
       const results = [];
       for (const block of data.content) {
         if (block.type === 'tool_use') {
-          const result = await executeTool(block.name, block.input);
+          const result = await executeTool(block.name, block.input, mutations);
           results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) });
         }
       }
@@ -206,13 +239,14 @@ async function _callAnthropic(apiKey, model, temperature, maxTokens, messages) {
         content: text ? text.text : '',
         model: data.model,
         tokensUsed: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+        mutations,
       };
     }
   }
   return { error: 'Limite de rounds de tool calls atingido.', content: '', model };
 }
 
-async function _callGoogle(apiKey, model, temperature, maxTokens, messages) {
+async function _callGoogle(apiKey, model, temperature, maxTokens, messages, mutations) {
   const systemMsg = messages.find(m => m.role === 'system');
   let contents = messages
     .filter(m => m.role !== 'system')
@@ -239,13 +273,13 @@ async function _callGoogle(apiKey, model, temperature, maxTokens, messages) {
       contents.push({ role: 'model', parts: candidate.content.parts });
       const responses = [];
       for (const part of fnCallParts) {
-        const result = await executeTool(part.functionCall.name, part.functionCall.args || {});
+        const result = await executeTool(part.functionCall.name, part.functionCall.args || {}, mutations);
         responses.push({ functionResponse: { name: part.functionCall.name, response: { content: result } } });
       }
       contents.push({ role: 'user', parts: responses });
     } else {
       const textPart = candidate.content.parts.find(p => p.text);
-      return { content: textPart ? textPart.text : '', model, tokensUsed: data.usageMetadata?.totalTokenCount };
+      return { content: textPart ? textPart.text : '', model, tokensUsed: data.usageMetadata?.totalTokenCount, mutations };
     }
   }
   return { error: 'Limite de rounds de tool calls atingido.', content: '', model };
@@ -255,18 +289,19 @@ async function _callGoogle(apiKey, model, temperature, maxTokens, messages) {
 
 async function sendAIMessage(messages, settings) {
   const { provider, apiKey, model, temperature, maxTokens, endpoint } = settings;
+  const mutations = [];
   try {
     if (provider === 'openai')
-      return await _callOpenAICompatible('https://api.openai.com/v1/chat/completions', apiKey, model, temperature, maxTokens, messages, true);
+      return await _callOpenAICompatible('https://api.openai.com/v1/chat/completions', apiKey, model, temperature, maxTokens, messages, true, mutations);
 
     if (provider === 'anthropic')
-      return await _callAnthropic(apiKey, model, temperature, maxTokens, messages);
+      return await _callAnthropic(apiKey, model, temperature, maxTokens, messages, mutations);
 
     if (provider === 'google')
-      return await _callGoogle(apiKey, model, temperature, maxTokens, messages);
+      return await _callGoogle(apiKey, model, temperature, maxTokens, messages, mutations);
 
     if (provider === 'custom' && endpoint)
-      return await _callOpenAICompatible(endpoint, apiKey, model, temperature, maxTokens, messages, false);
+      return await _callOpenAICompatible(endpoint, apiKey, model, temperature, maxTokens, messages, false, mutations);
 
     return { error: 'Provider desconhecido ou endpoint não configurado.', content: '', model: '' };
   } catch (err) {

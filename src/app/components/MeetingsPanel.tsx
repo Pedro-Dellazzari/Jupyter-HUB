@@ -16,8 +16,12 @@ export function MeetingsPanel() {
     participantsText: "",
   });
 
+  const loadMeetings = () => db.meetings.list().then(setMeetings);
+
   useEffect(() => {
-    db.meetings.list().then(setMeetings);
+    loadMeetings();
+    window.addEventListener("db-mutated", loadMeetings);
+    return () => window.removeEventListener("db-mutated", loadMeetings);
   }, []);
 
   const addMeeting = async () => {
