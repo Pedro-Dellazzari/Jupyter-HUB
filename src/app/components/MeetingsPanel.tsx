@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2, Video, MapPin, Users as UsersIcon } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { db, type Meeting, type MeetingInput } from "../lib/db";
 
 export function MeetingsPanel() {
@@ -199,9 +200,23 @@ export function MeetingsPanel() {
           )}
         </div>
 
+        <AnimatePresence>
         {showAddModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl animate-in zoom-in-95 duration-200">
+          <motion.div
+            key="modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1,    y: 0 }}
+              exit={{    opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl"
+            >
               <h3 className="text-lg font-bold text-green-600 mb-4">$ meetings --add</h3>
 
               <div className="space-y-4">
@@ -310,9 +325,10 @@ export function MeetingsPanel() {
                   Cancel
                 </button>
               </div>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
     </div>
   );

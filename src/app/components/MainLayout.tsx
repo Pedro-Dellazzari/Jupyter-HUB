@@ -1,8 +1,8 @@
 import { Outlet, Link, useLocation } from "react-router";
 import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings, RefreshCw, Clock } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import { variants, springs, hoverAnimations, tapAnimations, staggerContainer } from "../lib/animations";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
+import { variants, springs, hoverAnimations, tapAnimations, staggerContainer, reducedVariants, reducedStaggerContainer } from "../lib/animations";
 import { db } from "../lib/db";
 
 type PomodoroItem = {
@@ -23,6 +23,7 @@ const navItems = [
 
 export function MainLayout() {
   const location = useLocation();
+  const shouldReduce = useReducedMotion();
   const [showPomodoro, setShowPomodoro] = useState(true);
   
   // Pomodoro Timer State
@@ -207,9 +208,9 @@ export function MainLayout() {
         </div>
 
         {/* Navigation Links */}
-        <motion.nav 
+        <motion.nav
           className="p-4 space-y-2"
-          variants={staggerContainer}
+          variants={shouldReduce ? reducedStaggerContainer : staggerContainer}
           initial="initial"
           animate="animate"
         >
@@ -223,7 +224,7 @@ export function MainLayout() {
             return (
               <motion.div
                 key={item.path}
-                variants={variants.slideLeft}
+                variants={shouldReduce ? reducedVariants.slideLeft : variants.slideLeft}
                 custom={index}
               >
                 <Link
@@ -249,10 +250,10 @@ export function MainLayout() {
                         />
                       )}
                     </AnimatePresence>
+                    {/* Icon: only whileHover, no perpetual keyframe wiggle on route change */}
                     <motion.div
-                      animate={isActive ? {} : { rotate: [0, -5, 5, 0] }}
-                      transition={{ duration: 0.5, ease: "easeInOut" }}
                       whileHover={isActive ? {} : { scale: 1.1, rotate: 5 }}
+                      transition={{ duration: 0.15, ease: "easeOut" }}
                     >
                       <Icon className="w-5 h-5 relative z-10" />
                     </motion.div>
@@ -312,7 +313,7 @@ export function MainLayout() {
 
               {/* Mode & Timer - Compact Layout */}
               <div className="flex items-center justify-between mb-4">
-                <span className={`text-xs px-3 py-1.5 rounded-full transition-all duration-500 font-medium ${
+                <span className={`text-xs px-3 py-1.5 rounded-full transition-colors duration-300 font-medium ${
                   mode === "work" 
                     ? "gradient-green text-white glow-green" 
                     : "gradient-green-vibrant text-white glow-green"
@@ -333,9 +334,9 @@ export function MainLayout() {
               <div className="flex gap-2 mb-2">
                 <button
                   onClick={toggleTimer}
-                  className="flex-1 px-4 py-2.5 gradient-green-vibrant rounded-xl text-white hover:shadow-2xl hover:shadow-green-500/40 transition-all duration-500 transform hover:scale-105 active:scale-95 text-xs font-medium relative overflow-hidden group"
+                  className="flex-1 px-4 py-2.5 gradient-green-vibrant rounded-xl text-white hover:shadow-2xl hover:shadow-green-500/40 transition-all duration-200 transform hover:scale-105 active:scale-95 text-xs font-medium relative overflow-hidden group"
                 >
-                  <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
+                  <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-200" />
                   <span className="relative z-10">{isRunning ? "Pausar" : "Iniciar"}</span>
                 </button>
                 <button

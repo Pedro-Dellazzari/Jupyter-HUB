@@ -210,23 +210,35 @@ export function FocusLog() {
           )}
         </div>
 
-        {/* Timeline */}
+        {/* Timeline — AnimatePresence mode="wait" cross-fades between empty state and timeline */}
         {isLoading ? (
           <div className="flex items-center justify-center h-48 text-slate-400 text-sm">
             Carregando...
           </div>
-        ) : daySessions.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400"
-          >
-            <Clock className="w-10 h-10 opacity-30" />
-            <p className="text-sm">Nenhuma sessão registrada para este dia</p>
-            <p className="text-xs text-slate-400">Inicie um Pomodoro no painel lateral para registrar o tempo</p>
-          </motion.div>
         ) : (
-          <div className="glass-card rounded-2xl overflow-hidden">
+          <AnimatePresence mode="wait">
+          {daySessions.length === 0 ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
+              className="flex flex-col items-center justify-center gap-3 py-16 text-slate-400"
+            >
+              <Clock className="w-10 h-10 opacity-30" />
+              <p className="text-sm">Nenhuma sessão registrada para este dia</p>
+              <p className="text-xs text-slate-400">Inicie um Pomodoro no painel lateral para registrar o tempo</p>
+            </motion.div>
+          ) : (
+          <motion.div
+            key="timeline"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="glass-card rounded-2xl overflow-hidden"
+          >
             <div className="relative" style={{ height: `${(DAY_END - DAY_START + 1) * HOUR_HEIGHT}px` }}>
 
               {/* Hour grid lines */}
@@ -290,7 +302,9 @@ export function FocusLog() {
                 })}
               </AnimatePresence>
             </div>
-          </div>
+          </motion.div>
+          )}
+          </AnimatePresence>
         )}
       </div>
     </div>

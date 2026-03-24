@@ -191,7 +191,7 @@ export function SettingsPanel() {
     if (status === "idle" || !msg) return null;
     const colors = { syncing: "bg-blue-50 border-blue-300", success: "bg-green-50 border-green-300", error: "bg-red-50 border-red-300" } as const;
     return (
-      <div className={`mt-3 p-3 rounded-xl border flex items-center gap-3 ${colors[status as keyof typeof colors]}`}>
+      <div className={`mt-3 p-3 rounded-xl border flex items-center gap-3 animate-in fade-in duration-200 ${colors[status as keyof typeof colors]}`}>
         {status === "syncing" && <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0" />}
         {status === "success" && <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />}
         {status === "error"   && <AlertCircle  className="w-4 h-4 text-red-600 shrink-0" />}
@@ -477,7 +477,7 @@ export function SettingsPanel() {
                   {testStatus === "testing" ? "Testando..." : "Testar Conexão"}
                 </button>
                 {testStatus !== "idle" && (
-                  <div className={`mt-4 p-4 rounded-xl border flex items-center gap-3 ${
+                  <div className={`mt-4 p-4 rounded-xl border flex items-center gap-3 animate-in fade-in duration-200 ${
                     testStatus === "success" ? "bg-green-50 border-green-300" : testStatus === "error" ? "bg-red-50 border-red-300" : "bg-blue-50 border-blue-300"
                   }`}>
                     {testStatus === "success" && <CheckCircle2 className="w-5 h-5 text-green-600" />}

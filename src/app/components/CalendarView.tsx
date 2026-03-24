@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { ChevronLeft, ChevronRight, Plus, Trash2, Clock, AlignLeft, X } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { db, type CalendarEvent } from "../lib/db";
 
 type DisplayEvent = CalendarEvent & { date: string; time: string };
@@ -201,9 +202,17 @@ export function CalendarView() {
           </div>
         </div>
 
-        {/* Day detail panel */}
+        {/* Day detail panel — AnimatePresence gives it a proper exit animation */}
+        <AnimatePresence>
         {selectedDate && (
-          <div className="mt-4 bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
+          <motion.div
+            key="day-detail"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="mt-4 bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden"
+          >
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <div>
                 <p className="text-sm font-semibold text-slate-800 capitalize">{formatSelectedDate()}</p>
@@ -266,13 +275,28 @@ export function CalendarView() {
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
-        {/* Add event modal */}
+        {/* Add event modal — AnimatePresence provides exit on close */}
+        <AnimatePresence>
         {showAddModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
+          <motion.div
+            key="modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1,    y: 0 }}
+              exit={{    opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="bg-white border border-slate-200 rounded-2xl p-6 w-full max-w-md shadow-2xl"
+            >
               <div className="flex items-center justify-between mb-5">
                 <h3 className="text-base font-bold text-green-600">
                   Novo evento — {addDate ? new Date(addDate + "T12:00").toLocaleDateString("pt-BR", { day: "numeric", month: "long" }) : ""}
@@ -347,9 +371,10 @@ export function CalendarView() {
                   Cancelar
                 </button>
               </div>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
       </div>
     </div>

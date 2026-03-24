@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Mic, MicOff, AlertCircle, Terminal } from "lucide-react";
 import { Link } from "react-router";
-import { motion, AnimatePresence } from "motion/react";
-import { variants, staggerContainer } from "../lib/animations";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
+import { variants, staggerContainer, reducedVariants, reducedStaggerContainer } from "../lib/animations";
 import { db, type Message, type APISettings } from "../lib/db";
 
 const SETTINGS_KEY = "api-settings";
@@ -26,6 +26,7 @@ type ItemSuggestion = {
 };
 
 export function ChatInterface() {
+  const shouldReduce = useReducedMotion();
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInputState] = useState("");
@@ -618,7 +619,7 @@ export function ChatInterface() {
         {/* Messages */}
         <motion.div
           className="flex-1 overflow-auto p-6 space-y-4"
-          variants={staggerContainer}
+          variants={shouldReduce ? reducedStaggerContainer : staggerContainer}
           initial="initial"
           animate="animate"
         >
@@ -626,7 +627,9 @@ export function ChatInterface() {
             {messages.map(message => (
               <motion.div
                 key={message.id}
-                variants={message.role === "user" ? variants.slideRight : variants.slideLeft}
+                variants={message.role === "user"
+                  ? (shouldReduce ? reducedVariants.slideRight : variants.slideRight)
+                  : (shouldReduce ? reducedVariants.slideLeft  : variants.slideLeft)}
                 initial="initial"
                 animate="animate"
                 exit="exit"
@@ -815,7 +818,7 @@ export function ChatInterface() {
           </AnimatePresence>
 
           <div className="flex gap-3 items-end">
-            <div className="flex-1 glass-card rounded-3xl p-4 transition-all duration-500 focus-within:border-green-500/50 focus-within:shadow-2xl focus-within:shadow-green-500/20 border-2 border-transparent">
+            <div className="flex-1 glass-card rounded-3xl p-4 transition-[border-color,box-shadow] duration-200 focus-within:border-green-500/50 focus-within:shadow-2xl focus-within:shadow-green-500/20 border-2 border-transparent">
               <textarea
                 value={input}
                 onChange={handleInputChange}
@@ -828,7 +831,7 @@ export function ChatInterface() {
 
             <button
               onClick={toggleVoice}
-              className={`p-4 rounded-2xl border-2 transition-all duration-500 transform hover:scale-105 active:scale-95 ${
+              className={`p-4 rounded-2xl border-2 transition-[background-color,border-color,box-shadow,transform] duration-200 hover:scale-105 active:scale-95 ${
                 isListening
                   ? "gradient-green-vibrant border-green-500/30 text-white glow-green-strong"
                   : "glass-button border-transparent text-slate-700 hover:text-slate-900 hover:border-green-500/30"
@@ -840,9 +843,9 @@ export function ChatInterface() {
             <button
               onClick={handleSend}
               disabled={!input.trim() || isProcessing}
-              className="p-4 rounded-2xl gradient-green-vibrant text-white hover:shadow-2xl hover:shadow-green-500/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-500 transform hover:scale-105 active:scale-95 disabled:hover:scale-100 relative overflow-hidden group"
+              className="p-4 rounded-2xl gradient-green-vibrant text-white hover:shadow-2xl hover:shadow-green-500/40 disabled:opacity-40 disabled:cursor-not-allowed transition-[box-shadow,transform] duration-200 hover:scale-105 active:scale-95 disabled:hover:scale-100 relative overflow-hidden group"
             >
-              <div className="absolute inset-0 bg-white/20 translate-x-full group-hover:translate-x-0 transition-transform duration-500" />
+              <div className="absolute inset-0 bg-white/20 translate-x-full group-hover:translate-x-0 transition-transform duration-200" />
               <Send className="w-5 h-5 relative z-10" />
             </button>
           </div>

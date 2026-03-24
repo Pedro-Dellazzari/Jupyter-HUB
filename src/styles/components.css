@@ -14,12 +14,25 @@
 .glass-button {
   background: rgba(255, 255, 255, 0.65);
   border: 1px solid rgba(255, 255, 255, 0.45);
-  transition: background 0.25s ease, border-color 0.25s ease;
+  /* Animate only compositable properties; background is unavoidable here for the glass effect */
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 .glass-button:hover {
   background: rgba(255, 255, 255, 0.85);
   border-color: rgba(255, 255, 255, 0.65);
+}
+
+/* ── Accessibility: respect OS "Reduce Motion" preference ─────────────────── */
+/* Collapses all CSS transitions/animations to near-instant.                   */
+/* Framer Motion animations are handled per-component via useReducedMotion().  */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Gradients */

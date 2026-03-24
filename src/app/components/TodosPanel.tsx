@@ -81,7 +81,7 @@ export function TodosPanel() {
           </div>
         )}
 
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-6 shadow-lg transition-all duration-300 hover:shadow-xl">
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-6 shadow-lg transition-shadow duration-200 hover:shadow-xl">
           <div className="flex gap-3">
             <input
               type="text"
@@ -89,13 +89,13 @@ export function TodosPanel() {
               onChange={e => setNewTodo(e.target.value)}
               onKeyPress={e => e.key === "Enter" && addTodo()}
               placeholder="$ Enter new task..."
-              className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all duration-300"
+              className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-[border-color,box-shadow] duration-200"
             />
 
             <select
               value={priority}
               onChange={e => setPriority(e.target.value as "low" | "medium" | "high")}
-              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 font-mono transition-all duration-300"
+              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 font-mono transition-[border-color] duration-200"
             >
               <option value="low">Low</option>
               <option value="medium">Medium</option>
@@ -104,7 +104,7 @@ export function TodosPanel() {
 
             <button
               onClick={addTodo}
-              className="px-4 py-2 bg-green-500 rounded-xl text-white hover:bg-green-600 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-300 transform hover:scale-105 active:scale-95 flex items-center gap-2"
+              className="px-4 py-2 bg-green-500 rounded-xl text-white hover:bg-green-600 hover:shadow-lg hover:shadow-green-500/30 transition-[background-color,box-shadow,transform] duration-200 transform hover:scale-105 active:scale-95 flex items-center gap-2"
             >
               <Plus className="w-4 h-4" />
               Add
@@ -121,14 +121,14 @@ export function TodosPanel() {
             todos.map(todo => (
               <div
                 key={todo.id}
-                className={`bg-white border border-slate-200 rounded-2xl p-4 shadow-lg transition-all duration-300 hover:scale-[1.02] hover:shadow-xl hover:border-green-300 ${
+                className={`bg-white border border-slate-200 rounded-2xl p-4 shadow-lg transition-[transform,box-shadow,border-color,opacity] duration-200 hover:scale-[1.02] hover:shadow-xl hover:border-green-300 ${
                   todo.status === "done" ? "opacity-60" : ""
                 }`}
               >
                 <div className="flex items-start gap-3">
                   <button
                     onClick={() => toggleTodo(todo.id)}
-                    className="mt-1 text-green-500 hover:text-green-600 transition-all duration-300 transform hover:scale-110"
+                    className="mt-1 text-green-500 hover:text-green-600 transition-colors duration-150 hover:scale-110"
                   >
                     {todo.status === "done" ? (
                       <CheckCircle2 className="w-5 h-5" />
@@ -152,7 +152,7 @@ export function TodosPanel() {
 
                   <button
                     onClick={() => deleteTodo(todo.id)}
-                    className="text-red-400 hover:text-red-600 transition-all duration-300 transform hover:scale-110"
+                    className="text-red-400 hover:text-red-600 transition-colors duration-150 hover:scale-110"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
