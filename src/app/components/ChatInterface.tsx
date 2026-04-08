@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Mic, MicOff, AlertCircle, Terminal, ChevronDown, Check } from "lucide-react";
+import { Send, Mic, MicOff, AlertCircle, Terminal, ChevronDown, Check, Cpu } from "lucide-react";
 import { Link } from "react-router";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { variants, staggerContainer, reducedVariants, reducedStaggerContainer } from "../lib/animations";
@@ -7,6 +7,13 @@ import { db, type Message, type APISettings } from "../lib/db";
 import { DEFAULT_SYSTEM_PROMPT, PROMPT_SETTINGS_KEY } from "../lib/defaultPrompt";
 
 const SETTINGS_KEY = "api-settings";
+
+const PROVIDER_MODELS: Record<string, string[]> = {
+  openai:    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+  anthropic: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  google:    ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"],
+  custom:    [],
+};
 
 // ── Slash Commands ────────────────────────────────────────────────────────────
 const COMMANDS = [
@@ -42,6 +49,8 @@ export function ChatInterface() {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const [showDevicePicker, setShowDevicePicker] = useState(false);
+  const [showModelPicker, setShowModelPicker]   = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
 
   // inputRef keeps a sync copy so async callbacks always read the latest value
   const inputRef          = useRef("");
@@ -138,16 +147,29 @@ export function ChatInterface() {
     return () => navigator.mediaDevices.removeEventListener?.("devicechange", loadDevices);
   }, []);
 
-  // ── Close device picker on outside click ──────────────────────────────────
+  // ── Close pickers on outside click ───────────────────────────────────────
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
       if (devicePickerRef.current && !devicePickerRef.current.contains(e.target as Node)) {
         setShowDevicePicker(false);
       }
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setShowModelPicker(false);
+      }
     };
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, []);
+
+  // ── Change model ──────────────────────────────────────────────────────────
+  const selectModel = async (model: string) => {
+    if (!apiSettings) return;
+    const updated = { ...apiSettings, model };
+    setApiSettings(updated);
+    apiSettingsRef.current = updated as APISettings;
+    await db.settings.save(SETTINGS_KEY, updated);
+    setShowModelPicker(false);
+  };
 
   // Web Speech API removed — unreliable in Electron (onend fires immediately).
   // All voice input now goes through MediaRecorder → Whisper.
@@ -722,15 +744,60 @@ export function ChatInterface() {
     <div className="flex h-full bg-transparent">
       <div className="flex flex-col flex-1 min-w-0">
         {/* Header */}
-        <div className="border-b border-white/40 px-6 py-4 glass-panel backdrop-blur-xl">
-          <h2 className="text-lg font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
-            $ assistente-ia
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            {apiSettings?.apiKey
-              ? `Modelo: ${apiSettings.model} · ${apiSettings.provider}`
-              : "Digite / para ver os comandos disponíveis"}
-          </p>
+        <div className="border-b border-white/40 px-6 py-4 glass-panel backdrop-blur-xl flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
+              $ assistente-ia
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {apiSettings?.apiKey ? `${apiSettings.provider}` : "Digite / para ver os comandos disponíveis"}
+            </p>
+          </div>
+
+          {/* Model picker */}
+          {apiSettings?.apiKey && (
+            <div className="relative shrink-0" ref={modelPickerRef}>
+              <button
+                onClick={() => setShowModelPicker(v => !v)}
+                className="flex items-center gap-2 px-3 py-1.5 glass-button rounded-xl text-xs font-mono text-slate-700 hover:text-slate-900 hover:border-green-400/50 border border-transparent transition-all"
+              >
+                <Cpu className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                <span className="max-w-[180px] truncate">{apiSettings.model}</span>
+                <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform duration-150 ${showModelPicker ? "rotate-180" : ""}`} />
+              </button>
+
+              <AnimatePresence>
+                {showModelPicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute top-full right-0 mt-2 min-w-52 glass-card rounded-2xl border border-green-400/30 shadow-xl shadow-green-500/10 overflow-hidden z-50"
+                  >
+                    <div className="px-3 py-2 border-b border-slate-100">
+                      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Selecionar modelo</p>
+                    </div>
+                    {(PROVIDER_MODELS[apiSettings.provider] ?? []).map(model => (
+                      <button
+                        key={model}
+                        onClick={() => selectModel(model)}
+                        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-green-50 transition-colors"
+                      >
+                        <span className="text-xs font-mono text-slate-700 truncate">{model}</span>
+                        {apiSettings.model === model && <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />}
+                      </button>
+                    ))}
+                    {(PROVIDER_MODELS[apiSettings.provider] ?? []).length === 0 && (
+                      <p className="px-4 py-3 text-xs text-slate-400">
+                        Provider customizado — altere o modelo nas Configurações.
+                      </p>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
 
         {/* API Warning */}
