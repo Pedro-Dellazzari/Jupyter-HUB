@@ -5,7 +5,6 @@ import { db, type Task } from "../lib/db";
 export function TodosPanel() {
   const [todos, setTodos] = useState<Task[]>([]);
   const [newTodo, setNewTodo] = useState("");
-  const [priority, setPriority] = useState<"low" | "medium" | "high">("medium");
   const [error, setError] = useState<string | null>(null);
 
   const loadTodos = () =>
@@ -22,14 +21,12 @@ export function TodosPanel() {
   const addTodo = async () => {
     if (!newTodo.trim()) return;
     setError(null);
-    console.log("[TodosPanel] addTodo →", newTodo.trim(), priority);
     try {
-      const task = await db.tasks.add(newTodo.trim(), priority);
+      const task = await db.tasks.add(newTodo.trim());
       console.log("[TodosPanel] task recebida:", task);
       if (!task) throw new Error("addTask retornou null");
       setTodos(prev => [task, ...prev]);
       setNewTodo("");
-      setPriority("medium");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[TodosPanel] erro ao adicionar task:", err);
@@ -91,16 +88,6 @@ export function TodosPanel() {
               placeholder="$ Enter new task..."
               className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-[border-color,box-shadow] duration-200"
             />
-
-            <select
-              value={priority}
-              onChange={e => setPriority(e.target.value as "low" | "medium" | "high")}
-              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none focus:border-green-500 font-mono transition-[border-color] duration-200"
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
 
             <button
               onClick={addTodo}

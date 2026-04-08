@@ -196,19 +196,43 @@ export function ChatInterface() {
   // ── Context snapshot for AI system prompt ─────────────────────────────────
   const buildBriefContext = async (): Promise<string> => {
     const today = new Date().toISOString().split("T")[0];
-    const [tasks, habits, meetings] = await Promise.all([
-      db.tasks.list(), db.habits.list(), db.meetings.list(),
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split("T")[0];
+
+    const [tasks, habits, meetings, events, rawBlocklist] = await Promise.all([
+      db.tasks.list(), db.habits.list(), db.meetings.list(), db.events.list(),
+      db.settings.get("meeting-filters"),
     ]);
+
+    const blocklist: string[] = Array.isArray(rawBlocklist) ? rawBlocklist as string[] : [];
+    const isBlocked = (title: string) =>
+      blocklist.some(p => title.toLowerCase().includes(p.toLowerCase()));
+
     const open = tasks.filter(t => t.status !== "done" && t.status !== "cancelled" && t.status !== "archived");
     const urgent = open.filter(t => t.priority === "urgent").length;
     const doneToday = habits.filter(h => h.completions?.includes(today)).length;
-    const nextMeeting = meetings.find(m => m.start_at >= `${today} 00:00:00`);
-    return [
+
+    // Próxima reunião manual
+    const nextMeeting = meetings.find(m => m.start_at >= `${today} 00:00:00` && !isBlocked(m.title));
+
+    // Eventos de calendário (Google/Outlook) de hoje e amanhã — sem eventos bloqueados
+    const calToday    = events.filter(e => e.scheduled_at?.startsWith(today)      && !isBlocked(e.title));
+    const calTomorrow = events.filter(e => e.scheduled_at?.startsWith(tomorrowStr) && !isBlocked(e.title));
+
+    const lines = [
       `Hoje é ${new Date().toLocaleDateString("pt-BR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}.`,
       `Tarefas: ${open.length} abertas${urgent > 0 ? ` (${urgent} urgente${urgent > 1 ? "s" : ""})` : ""}.`,
       `Hábitos: ${doneToday}/${habits.length} concluídos hoje.`,
-      nextMeeting ? `Próxima reunião: "${nextMeeting.title}" em ${nextMeeting.start_at}.` : "Sem reuniões próximas.",
-    ].join(" ");
+      nextMeeting ? `Próxima reunião (manual): "${nextMeeting.title}" em ${nextMeeting.start_at}.` : "",
+      calToday.length > 0
+        ? `Eventos no calendário hoje (Google/Outlook): ${calToday.map(e => `"${e.title}" ${e.scheduled_at?.slice(11, 16) ?? ""}`).join(", ")}.`
+        : "",
+      calTomorrow.length > 0
+        ? `Eventos no calendário amanhã (Google/Outlook): ${calTomorrow.map(e => `"${e.title}" ${e.scheduled_at?.slice(11, 16) ?? ""}`).join(", ")}.`
+        : "",
+    ].filter(Boolean);
+
+    return lines.join(" ");
   };
 
   // ── /hoje formatter ───────────────────────────────────────────────────────

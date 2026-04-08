@@ -78,7 +78,7 @@ const TOOLS_SCHEMA = [
   },
   {
     name: 'list_events',
-    description: 'Lista todos os eventos do calendário com ID, título e data/hora',
+    description: 'Lista todos os eventos do calendário, incluindo os importados do Google Calendar e Outlook via iCal. USE ESTA FERRAMENTA quando o usuário perguntar sobre eventos, compromissos ou reuniões do calendário (ex: "o que tenho amanhã?", "minhas reuniões da semana"). Retorna título, data e hora de cada evento.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -153,7 +153,13 @@ async function executeTool(name, input, mutations) {
       mutations.push({ type: 'meeting_created', id: meeting.id, title: meeting.title, start_at: meeting.start_at });
       return meeting;
     }
-    case 'list_events':        return db.listEvents();
+    case 'list_events': {
+      const allEvents = db.listEvents();
+      const rawFilters = db.getSetting('meeting-filters');
+      const blocklist = Array.isArray(rawFilters) ? rawFilters : [];
+      if (blocklist.length === 0) return allEvents;
+      return allEvents.filter(e => !blocklist.some(p => e.title?.toLowerCase().includes(p.toLowerCase())));
+    }
     case 'create_event': {
       const event = db.addEvent({
         title: input.title, date: input.date, time: input.time || '',

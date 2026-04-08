@@ -1,11 +1,85 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
-import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink, Mic, Filter, Plus, X } from "lucide-react";
+import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink, Mic, Filter, Plus, X, Wrench, FileText, Terminal } from "lucide-react";
 import { db, type APISettings } from "../lib/db";
 import { DEFAULT_SYSTEM_PROMPT, PROMPT_SETTINGS_KEY } from "../lib/defaultPrompt";
 
 const SETTINGS_KEY          = "api-settings";
 const INTEGRATIONS_KEY      = "calendar-integrations";
 const FILTERS_KEY           = "meeting-filters";
+
+// ─── Tools Catalog ────────────────────────────────────────────────────────────
+
+const TOOLS_CATALOG = [
+  {
+    category: "Tarefas",
+    color: { bg: "bg-green-50", border: "border-green-200", badge: "bg-green-100 text-green-700 border border-green-200", dot: "bg-green-500", label: "text-green-700" },
+    tools: [
+      { name: "list_tasks",   desc: "Lista todas as tarefas com status, prioridade e data de criação.", params: "Nenhum" },
+      { name: "create_task",  desc: "Cria uma nova tarefa no banco de dados.", params: "title (obrigatório) · priority (opcional: low | medium | high | urgent)" },
+      { name: "toggle_task",  desc: "Alterna o status de uma tarefa entre pendente e concluída. Sempre use list_tasks antes para obter o ID real.", params: "id (obrigatório)" },
+      { name: "delete_task",  desc: "Remove permanentemente uma tarefa do banco.", params: "id (obrigatório)" },
+    ],
+  },
+  {
+    category: "Hábitos",
+    color: { bg: "bg-purple-50", border: "border-purple-200", badge: "bg-purple-100 text-purple-700 border border-purple-200", dot: "bg-purple-500", label: "text-purple-700" },
+    tools: [
+      { name: "list_habits",         desc: "Lista todos os hábitos com streak atual e registros de conclusão.", params: "Nenhum" },
+      { name: "toggle_habit_today",  desc: "Marca ou desmarca um hábito como concluído no dia atual. Sempre use list_habits antes para obter o ID real.", params: "id (obrigatório)" },
+    ],
+  },
+  {
+    category: "Reuniões",
+    color: { bg: "bg-blue-50", border: "border-blue-200", badge: "bg-blue-100 text-blue-700 border border-blue-200", dot: "bg-blue-500", label: "text-blue-700" },
+    tools: [
+      { name: "list_meetings",   desc: "Lista as reuniões criadas manualmente no app. Não inclui eventos do Google/Outlook — para esses use list_events.", params: "Nenhum" },
+      { name: "create_meeting",  desc: "Cria uma nova reunião no banco de dados do app.", params: "title · date (YYYY-MM-DD) · time (HH:MM) · duration (min) · participants (array) · location · notes" },
+    ],
+  },
+  {
+    category: "Eventos de Calendário",
+    color: { bg: "bg-orange-50", border: "border-orange-200", badge: "bg-orange-100 text-orange-700 border border-orange-200", dot: "bg-orange-500", label: "text-orange-700" },
+    tools: [
+      { name: "list_events",   desc: "Lista eventos sincronizados do Google Calendar e Outlook via iCal. Eventos bloqueados pelo filtro de reuniões são excluídos automaticamente. Use este tool (junto com list_meetings) ao responder sobre agenda.", params: "Nenhum" },
+      { name: "create_event",  desc: "Cria um novo evento no calendário interno do app (não sincroniza com Google/Outlook).", params: "title · date (YYYY-MM-DD) · time (HH:MM) · description · color" },
+    ],
+  },
+] as const;
+
+// ─── Slash Commands Catalog ───────────────────────────────────────────────────
+
+const SLASH_COMMANDS = [
+  {
+    category: "Conversa",
+    color: { bg: "bg-slate-50", border: "border-slate-200", badge: "bg-slate-100 text-slate-700 border border-slate-300", dot: "bg-slate-400", label: "text-slate-500" },
+    commands: [
+      { name: "clear", args: "", desc: "Inicia uma nova conversa, limpando o histórico visível da sessão atual.", example: "/clear" },
+    ],
+  },
+  {
+    category: "Tarefas",
+    color: { bg: "bg-green-50", border: "border-green-200", badge: "bg-green-100 text-green-700 border border-green-200", dot: "bg-green-500", label: "text-green-700" },
+    commands: [
+      { name: "tarefa", args: "<nome>", desc: "Cria uma nova tarefa com o nome fornecido diretamente, sem precisar digitar para a IA.", example: "/tarefa Revisar relatório mensal" },
+      { name: "feito",  args: "<nome>", desc: "Marca a tarefa com o nome fornecido como concluída. A IA busca a tarefa mais próxima pelo nome.", example: "/feito Revisar relatório mensal" },
+    ],
+  },
+  {
+    category: "Hábitos",
+    color: { bg: "bg-purple-50", border: "border-purple-200", badge: "bg-purple-100 text-purple-700 border border-purple-200", dot: "bg-purple-500", label: "text-purple-700" },
+    commands: [
+      { name: "habit", args: "<nome>", desc: "Cria um novo hábito diário com o nome fornecido.", example: "/habit Beber 2L de água" },
+    ],
+  },
+  {
+    category: "Resumos",
+    color: { bg: "bg-blue-50", border: "border-blue-200", badge: "bg-blue-100 text-blue-700 border border-blue-200", dot: "bg-blue-500", label: "text-blue-700" },
+    commands: [
+      { name: "hoje",       args: "", desc: "Exibe um resumo completo do dia: tarefas abertas por prioridade, hábitos pendentes e reuniões/eventos agendados.", example: "/hoje" },
+      { name: "fim_do_dia", args: "", desc: "Balanço do dia: tarefas concluídas, hábitos feitos vs. pendentes e uma mensagem motivacional.", example: "/fim_do_dia" },
+    ],
+  },
+] as const;
 
 // ─── AI Settings ─────────────────────────────────────────────────────────────
 
@@ -97,6 +171,7 @@ export function SettingsPanel() {
   const filterInputRef                = useRef<HTMLInputElement>(null);
 
   // ── Prompt state ──
+  const [promptSubTab, setPromptSubTab]   = useState<"prompt" | "tools" | "commands">("prompt");
   const [promptText, setPromptText]       = useState(DEFAULT_SYSTEM_PROMPT);
   const [promptEditing, setPromptEditing] = useState(false);
   const [promptSaved, setPromptSaved]     = useState(false);
@@ -805,6 +880,135 @@ export function SettingsPanel() {
         {/* ── Prompt Tab ─────────────────────────────────────────────────── */}
         {activeTab === "prompt" && (
           <>
+            {/* Sub-tabs */}
+            <div className="flex gap-1 mb-6 p-1 bg-slate-100 rounded-xl w-fit">
+              <button
+                onClick={() => setPromptSubTab("prompt")}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  promptSubTab === "prompt"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                System Prompt
+              </button>
+              <button
+                onClick={() => setPromptSubTab("tools")}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  promptSubTab === "tools"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                Ferramentas
+                <span className="ml-0.5 px-1.5 py-0.5 text-xs bg-slate-200 text-slate-600 rounded-full font-mono leading-none">
+                  {TOOLS_CATALOG.reduce((acc, g) => acc + g.tools.length, 0)}
+                </span>
+              </button>
+              <button
+                onClick={() => setPromptSubTab("commands")}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  promptSubTab === "commands"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                Comandos /
+                <span className="ml-0.5 px-1.5 py-0.5 text-xs bg-slate-200 text-slate-600 rounded-full font-mono leading-none">
+                  {SLASH_COMMANDS.reduce((acc, g) => acc + g.commands.length, 0)}
+                </span>
+              </button>
+            </div>
+
+            {/* ── Sub-tab: Ferramentas ── */}
+            {promptSubTab === "tools" && (
+              <div className="space-y-6">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Estas são as funções que a IA pode chamar automaticamente para ler e modificar seus dados.
+                  As ferramentas são executadas no processo principal do app e nunca expõem dados fora do seu dispositivo.
+                </p>
+                {TOOLS_CATALOG.map(group => (
+                  <div key={group.category}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className={`w-2 h-2 rounded-full ${group.color.dot}`} />
+                      <h3 className={`text-xs font-semibold uppercase tracking-wider ${group.color.label}`}>
+                        {group.category}
+                      </h3>
+                    </div>
+                    <div className="space-y-2">
+                      {group.tools.map(tool => (
+                        <div
+                          key={tool.name}
+                          className={`${group.color.bg} border ${group.color.border} rounded-2xl p-4`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <code className={`shrink-0 mt-0.5 text-xs font-mono px-2 py-0.5 rounded-lg ${group.color.badge}`}>
+                              {tool.name}
+                            </code>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-slate-700 leading-relaxed">{tool.desc}</p>
+                              {tool.params !== "Nenhum" ? (
+                                <p className="mt-1.5 text-xs text-slate-500 font-mono leading-relaxed">
+                                  <span className="text-slate-400">params: </span>{tool.params}
+                                </p>
+                              ) : (
+                                <p className="mt-1.5 text-xs text-slate-400 italic">Sem parâmetros</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Sub-tab: Comandos / ── */}
+            {promptSubTab === "commands" && (
+              <div className="space-y-6">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Digite esses comandos diretamente no campo de mensagem do Chat AI.
+                  Eles são processados localmente pelo app — sem consumir tokens da IA.
+                </p>
+                {SLASH_COMMANDS.map(group => (
+                  <div key={group.category}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className={`w-2 h-2 rounded-full ${group.color.dot}`} />
+                      <h3 className={`text-xs font-semibold uppercase tracking-wider ${group.color.label}`}>
+                        {group.category}
+                      </h3>
+                    </div>
+                    <div className="space-y-2">
+                      {group.commands.map(cmd => (
+                        <div
+                          key={cmd.name}
+                          className={`${group.color.bg} border ${group.color.border} rounded-2xl p-4`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <code className={`shrink-0 mt-0.5 text-xs font-mono px-2 py-0.5 rounded-lg ${group.color.badge}`}>
+                              /{cmd.name}{cmd.args ? ` ${cmd.args}` : ""}
+                            </code>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-slate-700 leading-relaxed">{cmd.desc}</p>
+                              <p className="mt-1.5 text-xs text-slate-400 font-mono">
+                                <span className="text-slate-300">ex: </span>{cmd.example}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Sub-tab: System Prompt ── */}
+            {promptSubTab === "prompt" && <>
             {/* Warning banner — shown before enabling edit */}
             {showWarnBanner && (
               <div className="mb-5 p-4 bg-red-50 border border-red-300 rounded-2xl flex items-start gap-3">
@@ -935,6 +1139,7 @@ export function SettingsPanel() {
                 </p>
               </div>
             )}
+            </>}
           </>
         )}
 
