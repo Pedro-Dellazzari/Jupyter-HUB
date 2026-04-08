@@ -336,11 +336,34 @@ const _WINDOWS_TZ = {
   'Central Brazilian Standard Time':'America/Cuiaba',
   'Tocantins Standard Time':        'America/Araguaina',
   'Bahia Standard Time':            'America/Bahia',
-  // Americas
+  // Latin America
+  'SA Pacific Standard Time':       'America/Bogota',      // Colombia, Peru, Ecuador (UTC-5)
+  'SA Western Standard Time':       'America/La_Paz',      // Bolivia (UTC-4)
+  'Venezuela Standard Time':        'America/Caracas',     // Venezuela (UTC-4)
+  'Paraguay Standard Time':         'America/Asuncion',    // Paraguay
+  'Pacific SA Standard Time':       'America/Santiago',    // Chile
+  'Argentina Standard Time':        'America/Argentina/Buenos_Aires',
+  'Montevideo Standard Time':       'America/Montevideo',
+  'Central America Standard Time':  'America/Guatemala',
+  'Mexico Standard Time':           'America/Mexico_City',
+  'Mexico Standard Time 2':         'America/Chihuahua',
+  'Mountain Standard Time (Mexico)':'America/Chihuahua',
+  'Greenland Standard Time':        'America/Godthab',
+  'Mid-Atlantic Standard Time':     'America/Noronha',
+  'Newfoundland Standard Time':     'America/St_Johns',
+  'Atlantic Standard Time':         'America/Halifax',
+  'Canada Central Standard Time':   'America/Regina',
+  'Cuba Standard Time':             'America/Havana',
+  'Haiti Standard Time':            'America/Port-au-Prince',
+  // US
   'Eastern Standard Time':          'America/New_York',
+  'US Eastern Standard Time':       'America/Indiana/Indianapolis',
   'Central Standard Time':          'America/Chicago',
   'Mountain Standard Time':         'America/Denver',
+  'US Mountain Standard Time':      'America/Phoenix',
   'Pacific Standard Time':          'America/Los_Angeles',
+  'Alaskan Standard Time':          'America/Anchorage',
+  'Hawaiian Standard Time':         'Pacific/Honolulu',
   'UTC-02':                         'Etc/GMT+2',
   'UTC-11':                         'Etc/GMT+11',
   // Europe
@@ -348,20 +371,35 @@ const _WINDOWS_TZ = {
   'Romance Standard Time':          'Europe/Paris',
   'W. Europe Standard Time':        'Europe/Berlin',
   'Central Europe Standard Time':   'Europe/Budapest',
+  'Central European Standard Time': 'Europe/Warsaw',
   'FLE Standard Time':              'Europe/Helsinki',
   'GTB Standard Time':              'Europe/Athens',
+  'Turkey Standard Time':           'Europe/Istanbul',
   'Russia Time Zone 3':             'Europe/Samara',
   'Russian Standard Time':          'Europe/Moscow',
+  'Belarus Standard Time':          'Europe/Minsk',
+  'W. Central Africa Standard Time':'Africa/Lagos',
+  'South Africa Standard Time':     'Africa/Johannesburg',
   // Asia/Pacific
   'China Standard Time':            'Asia/Shanghai',
   'Tokyo Standard Time':            'Asia/Tokyo',
+  'Korea Standard Time':            'Asia/Seoul',
   'India Standard Time':            'Asia/Kolkata',
+  'Sri Lanka Standard Time':        'Asia/Colombo',
   'Arabian Standard Time':          'Asia/Dubai',
+  'Arab Standard Time':             'Asia/Riyadh',
+  'Pakistan Standard Time':         'Asia/Karachi',
+  'Bangladesh Standard Time':       'Asia/Dhaka',
+  'SE Asia Standard Time':          'Asia/Bangkok',
+  'Singapore Standard Time':        'Asia/Singapore',
+  'Taipei Standard Time':           'Asia/Taipei',
   'AUS Eastern Standard Time':      'Australia/Sydney',
+  'AUS Central Standard Time':      'Australia/Darwin',
   'New Zealand Standard Time':      'Pacific/Auckland',
   // UTC
   'UTC':                            'UTC',
   'Greenwich Standard Time':        'Atlantic/Reykjavik',
+  'Dateline Standard Time':         'Etc/GMT+12',
 };
 
 /**
@@ -370,7 +408,9 @@ const _WINDOWS_TZ = {
  */
 function _resolveTimezone(tzid) {
   if (!tzid) return null;
-  const cleaned = tzid.replace(/^TZID=/i, '').trim();
+  // Strip "TZID=" prefix and any surrounding double-quotes
+  // (Outlook/Teams wraps in quotes: TZID="SA Pacific Standard Time")
+  let cleaned = tzid.replace(/^TZID=/i, '').trim().replace(/^"(.*)"$/, '$1').trim();
   if (!cleaned) return null;
   // Check Windows map first
   if (_WINDOWS_TZ[cleaned]) return _WINDOWS_TZ[cleaned];
@@ -379,7 +419,8 @@ function _resolveTimezone(tzid) {
     new Intl.DateTimeFormat('en', { timeZone: cleaned });
     return cleaned;
   } catch {
-    return null; // unknown — fall back to floating/local
+    console.warn(`[ical] Unknown TZID: "${cleaned}" — will try VTIMEZONE fallback`);
+    return null;
   }
 }
 
@@ -424,10 +465,49 @@ function _localFmt(dt) {
 }
 
 /**
+ * Convert a wall-clock datetime in a fixed UTC offset (minutes) to a local Date.
+ * e.g. Bogotá UTC-5 → offsetMinutes = -300
+ */
+function _fixedOffsetToLocal(y, mo, d, h, mi, offsetMinutes) {
+  // wall-clock → UTC: subtract the offset
+  const utcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, 0) - offsetMinutes * 60000;
+  return new Date(utcMs);
+}
+
+/**
+ * Parse all VTIMEZONE blocks in an iCal text and return a map of
+ * TZID → UTC offset in minutes (using the STANDARD section's TZOFFSETTO).
+ * This is used as a fallback when the TZID isn't in _WINDOWS_TZ or IANA.
+ */
+function _parseVTimezones(text) {
+  const result = {}; // tzid string → offset minutes
+  const blocks = text.split(/^BEGIN:VTIMEZONE/m).slice(1);
+  for (const block of blocks) {
+    const tzidM = block.match(/^TZID:(.+)$/m);
+    if (!tzidM) continue;
+    const tzid = tzidM[1].trim().replace(/^"(.*)"$/, '$1').trim();
+
+    // Prefer STANDARD section; fall back to DAYLIGHT if STANDARD is absent
+    const standardM = block.match(/BEGIN:STANDARD[\s\S]*?TZOFFSETTO:([+-]\d{4})/m)
+                   || block.match(/BEGIN:DAYLIGHT[\s\S]*?TZOFFSETTO:([+-]\d{4})/m)
+                   || block.match(/TZOFFSETTO:([+-]\d{4})/m);
+    if (!standardM) continue;
+
+    const raw  = standardM[1]; // e.g. "-0500" or "+0530"
+    const sign = raw[0] === '-' ? -1 : 1;
+    const hrs  = parseInt(raw.slice(1, 3), 10);
+    const mins = parseInt(raw.slice(3, 5), 10);
+    result[tzid] = sign * (hrs * 60 + mins);
+  }
+  return result;
+}
+
+/**
  * Parse a DTSTART/DTEND/RECURRENCE-ID/UNTIL value + optional TZID param.
  * Returns { date: "YYYY-MM-DD", time: "HH:MM", allDay: bool } or null.
+ * vtimezoneOffsets: map of TZID → UTC offset minutes extracted from VTIMEZONE blocks.
  */
-function _parseDTValue(dtValue, tzid) {
+function _parseDTValue(dtValue, tzid, vtimezoneOffsets = {}) {
   if (!dtValue) return null;
   dtValue = dtValue.trim();
 
@@ -457,8 +537,15 @@ function _parseDTValue(dtValue, tzid) {
     try {
       return _localFmt(_tzWallToLocal(year, month, day, hour, min, ianaName));
     } catch {
-      // Intl failed — fall through to floating treatment
+      // Intl failed — fall through
     }
+  }
+
+  // Fallback: use VTIMEZONE block offset if available for this TZID
+  const cleanedTzid = (tzid || '').replace(/^TZID=/i, '').trim().replace(/^"(.*)"$/, '$1').trim();
+  if (cleanedTzid && Object.prototype.hasOwnProperty.call(vtimezoneOffsets, cleanedTzid)) {
+    const offsetMins = vtimezoneOffsets[cleanedTzid];
+    return _localFmt(_fixedOffsetToLocal(year, month, day, hour, min, offsetMins));
   }
 
   // Floating / unknown timezone — treat as local time as-is
@@ -473,7 +560,7 @@ function _parseDTValue(dtValue, tzid) {
  * Expand a RRULE string from a start occurrence for the next `daysAhead` days.
  * Returns array of { date, time, allDay }.
  */
-function _expandRRule(rruleStr, startParsed, daysAhead) {
+function _expandRRule(rruleStr, startParsed, daysAhead, vtimezoneOffsets = {}) {
   const params = {};
   for (const part of rruleStr.split(';')) {
     const eq = part.indexOf('=');
@@ -488,7 +575,7 @@ function _expandRRule(rruleStr, startParsed, daysAhead) {
 
   let untilDate = null;
   if (params['UNTIL']) {
-    const u = _parseDTValue(params['UNTIL'], '');
+    const u = _parseDTValue(params['UNTIL'], '', vtimezoneOffsets);
     if (u) untilDate = new Date(`${u.date}T${u.time}:00`);
   }
 
@@ -575,6 +662,9 @@ function _parseICalEvents(rawText) {
     .replace(/\r/g, '\n')
     .replace(/\n[ \t]/g, '');  // fold character is CRLF + SPACE or TAB
 
+  // 2. Parse VTIMEZONE blocks → fallback offset map for unknown TZIDs
+  const vtimezoneOffsets = _parseVTimezones(text);
+
   // First pass: collect all VEVENT blocks, separating recurring masters,
   // overrides (RECURRENCE-ID), and plain events.
   const masters   = new Map(); // uid → { summary, description, parsed, rrule }
@@ -603,7 +693,7 @@ function _parseICalEvents(rawText) {
     if (!dtStartM) continue;
     const tzid   = dtStartM[1] || '';
     const dtVal  = dtStartM[2].trim();
-    const parsed = _parseDTValue(dtVal, tzid);
+    const parsed = _parseDTValue(dtVal, tzid, vtimezoneOffsets);
     if (!parsed) continue;
 
     // 5. DESCRIPTION
@@ -619,7 +709,7 @@ function _parseICalEvents(rawText) {
     const recIdM = block.match(/^RECURRENCE-ID(?:;([^:]*))?:(.+)$/m);
     if (recIdM) {
       const recIdTzid = recIdM[1] || tzid; // use RECURRENCE-ID's own param, fall back to DTSTART's
-      const recParsed = _parseDTValue(recIdM[2].trim(), recIdTzid);
+      const recParsed = _parseDTValue(recIdM[2].trim(), recIdTzid, vtimezoneOffsets);
       if (recParsed && uid) {
         if (!overrides.has(uid)) overrides.set(uid, new Set());
         overrides.get(uid).add(recParsed.date);
@@ -635,7 +725,7 @@ function _parseICalEvents(rawText) {
       masters.set(uid, { summary, description, parsed, rrule: rruleM[1].trim() });
     } else if (rruleM) {
       // No UID (malformed) — expand inline
-      const occs = _expandRRule(rruleM[1].trim(), parsed, 90);
+      const occs = _expandRRule(rruleM[1].trim(), parsed, 90, vtimezoneOffsets);
       for (const occ of occs) {
         singles.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
       }
@@ -648,7 +738,7 @@ function _parseICalEvents(rawText) {
   const results = [...singles];
   for (const [uid, { summary, description, parsed, rrule }] of masters) {
     const skippedDates = overrides.get(uid) || new Set();
-    const occs = _expandRRule(rrule, parsed, 90);
+    const occs = _expandRRule(rrule, parsed, 90, vtimezoneOffsets);
     for (const occ of occs) {
       if (!skippedDates.has(occ.date)) {
         results.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
