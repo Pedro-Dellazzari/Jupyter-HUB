@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { db, type Meeting, type MeetingInput } from "../lib/db";
 
 export function MeetingsPanel() {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [meetings, setMeetings]     = useState<Meeting[]>([]);
+  const [blocklist, setBlocklist]   = useState<string[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [filter, setFilter] = useState<"all" | "upcoming" | "past">("upcoming");
 
@@ -18,11 +19,20 @@ export function MeetingsPanel() {
   });
 
   const loadMeetings = () => db.meetings.list().then(setMeetings);
+  const loadBlocklist = () =>
+    db.settings.get("meeting-filters").then(v => { if (Array.isArray(v)) setBlocklist(v); });
 
   useEffect(() => {
     loadMeetings();
+    loadBlocklist();
     window.addEventListener("db-mutated", loadMeetings);
-    return () => window.removeEventListener("db-mutated", loadMeetings);
+    window.addEventListener("meeting-filters-changed", (e: Event) => {
+      const detail = (e as CustomEvent<string[]>).detail;
+      if (Array.isArray(detail)) setBlocklist(detail);
+    });
+    return () => {
+      window.removeEventListener("db-mutated", loadMeetings);
+    };
   }, []);
 
   const addMeeting = async () => {
@@ -46,11 +56,17 @@ export function MeetingsPanel() {
 
   const getMeetingDate = (m: Meeting) => new Date(m.start_at.replace(" ", "T"));
 
+  const isBlocked = (m: Meeting) => {
+    if (blocklist.length === 0) return false;
+    const title = m.title.toLowerCase();
+    return blocklist.some(p => title.includes(p.toLowerCase()));
+  };
+
   const filterMeetings = () => {
     const now = new Date();
-    const sorted = [...meetings].sort(
-      (a, b) => getMeetingDate(a).getTime() - getMeetingDate(b).getTime()
-    );
+    const sorted = [...meetings]
+      .filter(m => !isBlocked(m))
+      .sort((a, b) => getMeetingDate(a).getTime() - getMeetingDate(b).getTime());
     if (filter === "all") return sorted;
     return sorted.filter(m =>
       filter === "upcoming" ? getMeetingDate(m) >= now : getMeetingDate(m) < now
@@ -74,8 +90,13 @@ export function MeetingsPanel() {
           <div>
             <h2 className="text-xl font-bold text-green-600 mb-2">$ meetings</h2>
             <p className="text-sm text-slate-500">
-              Total: {meetings.length} | Upcoming:{" "}
-              {meetings.filter(m => getMeetingDate(m) > new Date()).length}
+              Total: {meetings.filter(m => !isBlocked(m)).length} | Upcoming:{" "}
+              {meetings.filter(m => !isBlocked(m) && getMeetingDate(m) > new Date()).length}
+              {blocklist.length > 0 && meetings.some(isBlocked) && (
+                <span className="ml-2 text-xs text-amber-600 font-medium">
+                  · {meetings.filter(isBlocked).length} ocultada{meetings.filter(isBlocked).length !== 1 ? "s" : ""} por filtro
+                </span>
+              )}
             </p>
           </div>
 

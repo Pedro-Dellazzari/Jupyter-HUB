@@ -1,9 +1,11 @@
-import { useState, useEffect, type ReactNode } from "react";
-import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink, Mic } from "lucide-react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
+import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink, Mic, Filter, Plus, X } from "lucide-react";
 import { db, type APISettings } from "../lib/db";
+import { DEFAULT_SYSTEM_PROMPT, PROMPT_SETTINGS_KEY } from "../lib/defaultPrompt";
 
 const SETTINGS_KEY          = "api-settings";
 const INTEGRATIONS_KEY      = "calendar-integrations";
+const FILTERS_KEY           = "meeting-filters";
 
 // ─── AI Settings ─────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ const OUTLOOK_STEPS = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SettingsPanel() {
-  const [activeTab, setActiveTab] = useState<"ia" | "integrations">("ia");
+  const [activeTab, setActiveTab] = useState<"ia" | "integrations" | "filters" | "prompt">("ia");
 
   // ── AI state ──
   const [settings, setSettings] = useState<APISettings>({
@@ -88,10 +90,24 @@ export function SettingsPanel() {
   const [integSaved, setIntegSaved]                   = useState(false);
   const [expandedGuide, setExpandedGuide]             = useState<"google" | "outlook" | null>(null);
 
+  // ── Filter state ──
+  const [blocklist, setBlocklist]     = useState<string[]>([]);
+  const [newPattern, setNewPattern]   = useState("");
+  const [filterSaved, setFilterSaved] = useState(false);
+  const filterInputRef                = useRef<HTMLInputElement>(null);
+
+  // ── Prompt state ──
+  const [promptText, setPromptText]       = useState(DEFAULT_SYSTEM_PROMPT);
+  const [promptEditing, setPromptEditing] = useState(false);
+  const [promptSaved, setPromptSaved]     = useState(false);
+  const [showWarnBanner, setShowWarnBanner] = useState(false);
+
   // ── Load from DB ──
   useEffect(() => {
     db.settings.get(SETTINGS_KEY).then(v => { if (v) setSettings(v as APISettings); });
     db.settings.get(INTEGRATIONS_KEY).then(v => { if (v) setIntegrations(v as CalendarIntegrations); });
+    db.settings.get(FILTERS_KEY).then(v => { if (Array.isArray(v)) setBlocklist(v); });
+    db.settings.get(PROMPT_SETTINGS_KEY).then(v => { if (typeof v === "string" && v.trim()) setPromptText(v); });
   }, []);
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -183,6 +199,47 @@ export function SettingsPanel() {
     const updated = { ...integrations, [provider]: DEFAULT_INTEGRATIONS[provider] };
     setIntegrations(updated);
     await db.settings.save(INTEGRATIONS_KEY, updated);
+  };
+
+  // ── Filter handlers ────────────────────────────────────────────────────────
+
+  const addPattern = () => {
+    const trimmed = newPattern.trim();
+    if (!trimmed || blocklist.includes(trimmed)) return;
+    setBlocklist(prev => [...prev, trimmed]);
+    setNewPattern("");
+    filterInputRef.current?.focus();
+  };
+
+  const removePattern = (pattern: string) => {
+    setBlocklist(prev => prev.filter(p => p !== pattern));
+  };
+
+  const saveFilters = async () => {
+    await db.settings.save(FILTERS_KEY, blocklist);
+    setFilterSaved(true);
+    window.dispatchEvent(new CustomEvent("meeting-filters-changed", { detail: blocklist }));
+    setTimeout(() => setFilterSaved(false), 3000);
+  };
+
+  // ── Prompt handlers ────────────────────────────────────────────────────────
+
+  const savePrompt = async () => {
+    await db.settings.save(PROMPT_SETTINGS_KEY, promptText);
+    window.dispatchEvent(new CustomEvent("system-prompt-changed", { detail: promptText }));
+    setPromptEditing(false);
+    setPromptSaved(true);
+    setTimeout(() => setPromptSaved(false), 3000);
+  };
+
+  const revertPrompt = async () => {
+    setPromptText(DEFAULT_SYSTEM_PROMPT);
+    await db.settings.save(PROMPT_SETTINGS_KEY, DEFAULT_SYSTEM_PROMPT);
+    window.dispatchEvent(new CustomEvent("system-prompt-changed", { detail: DEFAULT_SYSTEM_PROMPT }));
+    setPromptEditing(false);
+    setShowWarnBanner(false);
+    setPromptSaved(true);
+    setTimeout(() => setPromptSaved(false), 3000);
   };
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -341,7 +398,7 @@ export function SettingsPanel() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-6 bg-slate-100 p-1 rounded-2xl w-fit">
-          {(["ia", "integrations"] as const).map(tab => (
+          {(["ia", "integrations", "filters", "prompt"] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -351,7 +408,7 @@ export function SettingsPanel() {
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              {tab === "ia" ? "IA" : "Integrações"}
+              {tab === "ia" ? "IA" : tab === "integrations" ? "Integrações" : tab === "filters" ? "Filtros" : "Prompt"}
             </button>
           ))}
         </div>
@@ -632,6 +689,255 @@ export function SettingsPanel() {
             </div>
           </>
         )}
+
+        {/* ── Filters Tab ────────────────────────────────────────────────── */}
+        {activeTab === "filters" && (
+          <>
+            {/* Info banner */}
+            <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-3">
+              <Filter className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-slate-800 mb-0.5">Filtro de reuniões por título</p>
+                <p className="text-xs text-slate-600">
+                  Reuniões cujo título contenha qualquer um dos padrões abaixo serão <strong>ocultadas</strong> na aba Reuniões.
+                  A comparação é case-insensitive (maiúsculas e minúsculas são tratadas igualmente).
+                  Útil para esconder entradas como <strong>OOO</strong>, <strong>Out of Office</strong>, <strong>Bloqueado</strong>, etc.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-xl space-y-5">
+
+              {/* Add pattern input */}
+              <div>
+                <label className="text-sm text-slate-600 font-medium block mb-2">Adicionar padrão</label>
+                <div className="flex gap-2">
+                  <input
+                    ref={filterInputRef}
+                    type="text"
+                    value={newPattern}
+                    onChange={e => setNewPattern(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addPattern()}
+                    placeholder='Ex: OOO, Out of Office, Bloqueado...'
+                    className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all placeholder-slate-400"
+                  />
+                  <button
+                    onClick={addPattern}
+                    disabled={!newPattern.trim() || blocklist.includes(newPattern.trim())}
+                    className="flex items-center gap-1.5 px-4 py-2.5 bg-green-500 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-xl font-medium transition-all hover:shadow-lg hover:shadow-green-500/30 hover:scale-105 active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Adicionar
+                  </button>
+                </div>
+              </div>
+
+              {/* Blocklist */}
+              <div>
+                <label className="text-sm text-slate-600 font-medium block mb-2">
+                  Padrões bloqueados
+                  <span className="ml-2 text-xs font-normal text-slate-400">({blocklist.length} {blocklist.length !== 1 ? "padrões" : "padrão"})</span>
+                </label>
+
+                {blocklist.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
+                    Nenhum padrão adicionado ainda.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {blocklist.map(pattern => (
+                      <div
+                        key={pattern}
+                        className="flex items-center justify-between gap-3 px-4 py-2.5 bg-white border border-slate-200 rounded-xl group hover:border-red-200 transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
+                          <span className="text-sm font-mono text-slate-800 truncate">{pattern}</span>
+                        </div>
+                        <button
+                          onClick={() => removePattern(pattern)}
+                          className="shrink-0 p-1 text-slate-300 hover:text-red-500 group-hover:text-red-400 rounded-lg transition-colors"
+                          title="Remover padrão"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Preview note */}
+              {blocklist.length > 0 && (
+                <div className="p-3 bg-slate-100 rounded-xl">
+                  <p className="text-xs text-slate-500 font-mono">
+                    Reuniões bloqueadas se o título contiver:{" "}
+                    {blocklist.map((p, i) => (
+                      <span key={p}>
+                        <span className="text-red-600 font-semibold">"{p}"</span>
+                        {i < blocklist.length - 1 ? " ou " : ""}
+                      </span>
+                    ))}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Save */}
+            <div className="mt-6 flex items-center gap-4">
+              <button
+                onClick={saveFilters}
+                className="px-6 py-3 bg-green-500 rounded-xl text-white hover:bg-green-600 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-300 transform hover:scale-105 active:scale-95 flex items-center gap-2"
+              >
+                <Save className="w-5 h-5" />
+                Salvar Filtros
+              </button>
+              {filterSaved && (
+                <div className="flex items-center gap-2 text-green-600 animate-in slide-in-from-left-2 duration-300">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span className="text-sm">Filtros salvos!</span>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Prompt Tab ─────────────────────────────────────────────────── */}
+        {activeTab === "prompt" && (
+          <>
+            {/* Warning banner — shown before enabling edit */}
+            {showWarnBanner && (
+              <div className="mb-5 p-4 bg-red-50 border border-red-300 rounded-2xl flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-red-700 mb-1">Atenção: edição avançada</p>
+                  <p className="text-xs text-red-700 leading-relaxed">
+                    Modificar o prompt pode quebrar o comportamento da IA — ela pode parar de criar tarefas,
+                    reuniões ou eventos automaticamente, ou responder de forma incorreta.
+                    Mantenha a variável <code className="bg-red-100 px-1 rounded font-mono">{"{{context}}"}</code> no
+                    texto para que a IA continue recebendo os dados do seu banco.
+                    Use o botão <strong>"Reverter"</strong> para voltar ao prompt original a qualquer momento.
+                  </p>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => { setPromptEditing(true); setShowWarnBanner(false); }}
+                      className="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs rounded-xl font-medium transition-all"
+                    >
+                      Entendi, quero editar mesmo assim
+                    </button>
+                    <button
+                      onClick={() => setShowWarnBanner(false)}
+                      className="px-4 py-1.5 bg-white border border-slate-200 text-slate-600 text-xs rounded-xl font-medium transition-all hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Info banner (when not in edit mode) */}
+            {!showWarnBanner && !promptEditing && (
+              <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Este é o prompt de sistema enviado à IA a cada mensagem. Ele define o comportamento,
+                  as regras e o contexto do assistente. A variável{" "}
+                  <code className="bg-blue-100 px-1 rounded font-mono text-blue-700">{"{{context}}"}</code>{" "}
+                  é substituída automaticamente pelo snapshot atual do banco (tarefas, hábitos, reuniões).
+                </p>
+              </div>
+            )}
+
+            {/* Prompt textarea */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-slate-700">System Prompt</label>
+                <div className="flex items-center gap-2">
+                  {promptText !== DEFAULT_SYSTEM_PROMPT && (
+                    <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 border border-amber-300 rounded-full font-medium">
+                      Personalizado
+                    </span>
+                  )}
+                  {promptText === DEFAULT_SYSTEM_PROMPT && (
+                    <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 border border-green-200 rounded-full font-medium">
+                      Padrão
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <textarea
+                value={promptText}
+                onChange={e => setPromptText(e.target.value)}
+                disabled={!promptEditing}
+                rows={16}
+                className={`w-full rounded-xl px-4 py-3 text-xs font-mono text-slate-800 leading-relaxed resize-y outline-none transition-all border ${
+                  promptEditing
+                    ? "bg-white border-green-400 shadow-lg shadow-green-500/10"
+                    : "bg-slate-100 border-slate-200 text-slate-500 cursor-default select-all"
+                }`}
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              {!promptEditing ? (
+                <button
+                  onClick={() => setShowWarnBanner(true)}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-sm rounded-xl font-medium transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
+                >
+                  Editar prompt
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={savePrompt}
+                    disabled={!promptText.includes("{{context}}")}
+                    className="px-5 py-2.5 bg-green-500 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-xl font-medium transition-all hover:shadow-lg hover:shadow-green-500/30 hover:scale-105 active:scale-95 flex items-center gap-2"
+                    title={!promptText.includes("{{context}}") ? "O prompt precisa conter {{context}}" : ""}
+                  >
+                    <Save className="w-4 h-4" />
+                    Salvar prompt
+                  </button>
+                  <button
+                    onClick={() => { setPromptEditing(false); }}
+                    className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm rounded-xl font-medium transition-all hover:scale-105 active:scale-95"
+                  >
+                    Cancelar
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={revertPrompt}
+                disabled={promptText === DEFAULT_SYSTEM_PROMPT}
+                className="px-5 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-600 text-sm rounded-xl font-medium transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
+              >
+                Reverter para o padrão
+              </button>
+
+              {promptSaved && (
+                <div className="flex items-center gap-2 text-green-600 animate-in slide-in-from-left-2 duration-300">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span className="text-sm">Salvo!</span>
+                </div>
+              )}
+            </div>
+
+            {/* Context variable note */}
+            {promptEditing && !promptText.includes("{{context}}") && (
+              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                <p className="text-xs text-red-700">
+                  O prompt precisa conter <code className="font-mono bg-red-100 px-1 rounded">{"{{context}}"}</code> para salvar.
+                  Sem ela, a IA não terá acesso ao seu banco de dados.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
       </div>
     </div>
   );
