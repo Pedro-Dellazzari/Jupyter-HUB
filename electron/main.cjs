@@ -744,9 +744,9 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#f8fafc',
+      color: 'rgba(255,255,255,0)',
       symbolColor: '#475569',
-      height: 48,
+      height: 40,
     },
     show: false,
   });

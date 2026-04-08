@@ -1,6 +1,6 @@
 import { Outlet, Link, useLocation } from "react-router";
 import { Terminal, CheckSquare, Calendar, Users, TrendingUp, Settings, RefreshCw, Clock } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { variants, springs, hoverAnimations, tapAnimations, staggerContainer, reducedVariants, reducedStaggerContainer } from "../lib/animations";
 import { db } from "../lib/db";
@@ -204,7 +204,20 @@ export function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-white text-slate-900 font-mono overflow-hidden gradient-mesh-bg">
+    <div className="flex flex-col h-screen bg-white text-slate-900 font-mono overflow-hidden gradient-mesh-bg">
+
+      {/* Title bar — draggable region for frameless window */}
+      <div
+        className="flex items-center px-4 shrink-0 glass-panel border-b border-white/40 select-none"
+        style={{ height: 40, WebkitAppRegion: 'drag' } as React.CSSProperties}
+      >
+        <span className="text-xs font-semibold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent tracking-widest">
+          JUPYTER HUB
+        </span>
+      </div>
+
+      {/* Body — sidebar + content */}
+      <div className="flex flex-1 overflow-hidden">
 
       {/* Pomodoro end toast */}
       <AnimatePresence>
@@ -389,9 +402,11 @@ export function MainLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 min-h-[calc(100vh-57px)] overflow-auto">
+      <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
+
+      </div>{/* end body */}
     </div>
   );
 }
