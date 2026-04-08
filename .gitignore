@@ -2,6 +2,9 @@
 # Jupyter HUB - .gitignore
 # ============================================
 
+# Claude Code session memory (contains project context)
+.claude/
+
 # Dependencies
 node_modules/
 .pnp

@@ -60,7 +60,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── AI ─────────────────────────────────────────────────────────────────────
   ai: {
-    chat: (messages, settings) => ipcRenderer.invoke('ai:chat', messages, settings),
+    chat:       (messages, settings)                 => ipcRenderer.invoke('ai:chat', messages, settings),
+    transcribe: (audioBase64, mimeType, settings)    => ipcRenderer.invoke('ai:transcribe', audioBase64, mimeType, settings),
   },
 
   // ── iCal fetch/sync (via main process — sem CORS) ─────────────────────────

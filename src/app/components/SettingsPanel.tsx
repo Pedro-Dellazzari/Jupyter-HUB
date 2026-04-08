@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink } from "lucide-react";
+import { Save, Eye, EyeOff, Key, CheckCircle2, AlertCircle, RefreshCw, Calendar, Link2, ChevronRight, Unlink, Mic } from "lucide-react";
 import { db, type APISettings } from "../lib/db";
 
 const SETTINGS_KEY          = "api-settings";
@@ -73,8 +73,10 @@ export function SettingsPanel() {
     temperature: 0.7,
     maxTokens: 2000,
     endpoint: "",
+    whisperApiKey: "",
   });
-  const [showApiKey, setShowApiKey]   = useState(false);
+  const [showApiKey, setShowApiKey]         = useState(false);
+  const [showWhisperKey, setShowWhisperKey] = useState(false);
   const [saved, setSaved]             = useState(false);
   const [testStatus, setTestStatus]   = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
@@ -100,6 +102,8 @@ export function SettingsPanel() {
     await db.settings.save(SETTINGS_KEY, settings);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
+    // Notify other panels (e.g. ChatInterface) to reload settings
+    window.dispatchEvent(new CustomEvent("settings-saved", { detail: settings }));
   };
 
   const handleProviderChange = (provider: APISettings["provider"]) => {
@@ -411,6 +415,31 @@ export function SettingsPanel() {
                 </div>
                 <p className="text-xs text-slate-500 mt-2">Sua API key é armazenada no banco de dados local (SQLite) e nunca é enviada para nossos servidores.</p>
               </div>
+
+              {/* Whisper API Key — shown when provider ≠ openai */}
+              {settings.provider !== "openai" && (
+                <div>
+                  <label className="text-sm text-slate-600 font-medium flex items-center gap-2 mb-2">
+                    <Mic className="w-4 h-4 text-slate-400" />
+                    Chave OpenAI (voz — opcional)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showWhisperKey ? "text" : "password"}
+                      value={settings.whisperApiKey || ""}
+                      onChange={e => setSettings({ ...settings, whisperApiKey: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 pr-12 text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-green-500 focus:shadow-lg focus:shadow-green-500/20 font-mono transition-all duration-300"
+                      placeholder="sk-... (OpenAI key para Whisper)"
+                    />
+                    <button onClick={() => setShowWhisperKey(!showWhisperKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900 transition-colors">
+                      {showWhisperKey ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Usado exclusivamente para transcrição de voz (Whisper). Deixe em branco se não quiser usar modo voz.
+                  </p>
+                </div>
+              )}
 
               {/* Custom endpoint */}
               {settings.provider === "custom" && (

@@ -38,6 +38,35 @@ export function MainLayout() {
     { value: "free", label: "Sessão Livre", kind: "free" },
   ]);
 
+  // ── iCal auto-sync ─────────────────────────────────────────────────────────
+  const runIcalSync = async () => {
+    try {
+      const raw = await db.settings.get("calendar-integrations") as Record<string, { url: string; enabled: boolean }> | null;
+      if (!raw) return;
+      const providers = Object.entries(raw) as [string, { url: string; enabled: boolean }][];
+      const enabled = providers.filter(([, cfg]) => cfg.enabled && cfg.url?.trim());
+      if (enabled.length === 0) return;
+
+      let mutated = false;
+      for (const [provider, cfg] of enabled) {
+        const source = provider === "google" ? "ical:google" : "ical:outlook";
+        const color  = provider === "google" ? "#4285f4"    : "#0078d4";
+        try {
+          const result = await db.ical.sync(cfg.url, source, color);
+          if (!result.error) mutated = true;
+        } catch { /* silently skip on network error */ }
+      }
+      if (mutated) window.dispatchEvent(new CustomEvent("db-mutated"));
+    } catch { /* silently skip */ }
+  };
+
+  useEffect(() => {
+    runIcalSync();
+    const interval = setInterval(runIcalSync, 30 * 60 * 1000); // a cada 30 min
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Pomodoro items ─────────────────────────────────────────────────────────
   const loadPomodoroItems = async () => {
     const today = new Date().toISOString().split("T")[0];
     const [tasks, habits] = await Promise.all([db.tasks.list(), db.habits.list()]);

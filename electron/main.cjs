@@ -644,6 +644,37 @@ function registerIPCHandlers() {
   // AI Proxy
   ipcMain.handle('ai:chat', (_, messages, settings) => sendAIMessage(messages, settings));
 
+  // Whisper transcription (audio base64 → text)
+  ipcMain.handle('ai:transcribe', async (_, audioBase64, mimeType, settings) => {
+    const { provider, apiKey, whisperApiKey } = settings || {};
+    // Use whisperApiKey if set; otherwise fall back to apiKey when provider is openai
+    const key = whisperApiKey?.trim() || (provider === 'openai' ? apiKey : null);
+    if (!key) {
+      return { error: 'Transcrição requer uma OpenAI API key. Configure "Chave OpenAI (voz)" nas Configurações.' };
+    }
+    try {
+      const buffer = Buffer.from(audioBase64, 'base64');
+      const blob = new Blob([buffer], { type: mimeType || 'audio/webm' });
+      const formData = new FormData();
+      formData.append('file', blob, 'recording.webm');
+      formData.append('model', 'whisper-1');
+      formData.append('language', 'pt');
+      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return { error: `Whisper ${res.status}: ${errText}` };
+      }
+      const data = await res.json();
+      return { text: data.text || '' };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+
   // iCal fetch — runs in main process to bypass CORS
   ipcMain.handle('ical:fetch', async (_, url) => {
     try {

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Mic, MicOff, AlertCircle, Terminal } from "lucide-react";
+import { Send, Mic, MicOff, AlertCircle, Terminal, ChevronDown, Check } from "lucide-react";
 import { Link } from "react-router";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { variants, staggerContainer, reducedVariants, reducedStaggerContainer } from "../lib/animations";
@@ -37,12 +37,21 @@ export function ChatInterface() {
   const [selectedCmd, setSelectedCmd] = useState(0);
   const [itemSuggestions, setItemSuggestions] = useState<ItemSuggestion[]>([]);
   const [selectedItem, setSelectedItem] = useState(0);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [showDevicePicker, setShowDevicePicker] = useState(false);
 
   // inputRef keeps a sync copy so async callbacks always read the latest value
-  const inputRef       = useRef("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
-  const activeConvRef  = useRef<string | null>(null);
+  const inputRef          = useRef("");
+  const messagesEndRef    = useRef<HTMLDivElement>(null);
+  const activeConvRef     = useRef<string | null>(null);
+  const mediaRecorderRef  = useRef<MediaRecorder | null>(null);
+  const audioChunksRef    = useRef<Blob[]>([]);
+  const mediaStreamRef    = useRef<MediaStream | null>(null);
+  const devicePickerRef   = useRef<HTMLDivElement>(null);
+  // always-fresh ref so async onstop doesn't read stale apiSettings
+  const apiSettingsRef    = useRef<APISettings | null>(null);
 
   const setInput = (val: string) => {
     inputRef.current = val;
@@ -77,20 +86,55 @@ export function ChatInterface() {
     init();
   }, []);
 
-  // ── Speech recognition ─────────────────────────────────────────────────────
+  // keep apiSettingsRef always current
+  useEffect(() => { apiSettingsRef.current = apiSettings; }, [apiSettings]);
+
+  // reload settings when user saves from SettingsPanel (without needing app restart)
   useEffect(() => {
-    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) return;
-    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    recognitionRef.current = new SR();
-    recognitionRef.current.continuous = false;
-    recognitionRef.current.interimResults = false;
-    recognitionRef.current.onresult = (e: any) => {
-      setInput(e.results[0][0].transcript);
-      setIsListening(false);
+    const onSettingsSaved = (e: Event) => {
+      const saved = (e as CustomEvent).detail as APISettings;
+      if (saved) {
+        setApiSettings(saved);
+        apiSettingsRef.current = saved;
+      }
     };
-    recognitionRef.current.onerror = () => setIsListening(false);
-    recognitionRef.current.onend   = () => setIsListening(false);
+    window.addEventListener("settings-saved", onSettingsSaved);
+    return () => window.removeEventListener("settings-saved", onSettingsSaved);
   }, []);
+
+  // ── Audio device enumeration ───────────────────────────────────────────────
+  useEffect(() => {
+    async function loadDevices() {
+      try {
+        // Request mic permission so device labels are populated
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+        const all = await navigator.mediaDevices.enumerateDevices();
+        const inputs = all.filter(d => d.kind === "audioinput");
+        setAudioDevices(inputs);
+        if (inputs.length > 0) setSelectedDeviceId(inputs[0].deviceId);
+      } catch {
+        // Permission denied or no devices — Web Speech API fallback will be used
+      }
+    }
+    loadDevices();
+    navigator.mediaDevices.addEventListener?.("devicechange", loadDevices);
+    return () => navigator.mediaDevices.removeEventListener?.("devicechange", loadDevices);
+  }, []);
+
+  // ── Close device picker on outside click ──────────────────────────────────
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (devicePickerRef.current && !devicePickerRef.current.contains(e.target as Node)) {
+        setShowDevicePicker(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, []);
+
+  // Web Speech API removed — unreliable in Electron (onend fires immediately).
+  // All voice input now goes through MediaRecorder → Whisper.
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -554,18 +598,107 @@ export function ChatInterface() {
     }
   };
 
-  const toggleVoice = () => {
-    if (!recognitionRef.current) {
-      alert("Reconhecimento de voz não suportado neste navegador.");
+  // ── Transcribe via Whisper (OpenAI) ───────────────────────────────────────
+  const transcribeWithWhisper = async (blob: Blob, mimeType: string, settings: APISettings) => {
+    setIsTranscribing(true);
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < uint8.length; i += 8192) {
+        binary += String.fromCharCode(...uint8.subarray(i, i + 8192));
+      }
+      const base64 = btoa(binary);
+      const result = await db.ai.transcribe(base64, mimeType, settings);
+      if (result.text) {
+        setInput(result.text);
+      } else if (result.error) {
+        alert(`Erro na transcrição de voz:\n${result.error}`);
+      }
+    } catch (err) {
+      console.error("Whisper transcription error:", err);
+      alert(`Erro inesperado na transcrição: ${(err as Error).message}`);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // ── Toggle voice recording ─────────────────────────────────────────────────
+  const toggleVoice = async () => {
+    // ── Stop ─────────────────────────────────────────────────────────────────
+    if (isListening) {
+      setIsListening(false);
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
       return;
     }
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
-      recognitionRef.current.start();
-      setIsListening(true);
+
+    // ── Start (always MediaRecorder — reliable in Electron) ──────────────────
+    let stream: MediaStream;
+    try {
+      // Try with selected device first; fall back to default if exact constraint fails
+      const constraints: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true };
+      if (selectedDeviceId) constraints.deviceId = { ideal: selectedDeviceId };  // "ideal" not "exact" — won't throw if unavailable
+      stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    } catch (err) {
+      console.error("getUserMedia failed:", err);
+      alert("Não foi possível acessar o microfone. Verifique as permissões do sistema.");
+      return;
     }
+
+    mediaStreamRef.current = stream;
+    audioChunksRef.current = [];
+
+    const mimeType =
+      MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" :
+      MediaRecorder.isTypeSupported("audio/webm")             ? "audio/webm" :
+      MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")  ? "audio/ogg;codecs=opus" :
+      "";
+
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    } catch (err) {
+      console.error("MediaRecorder init failed:", err);
+      stream.getTracks().forEach(t => t.stop());
+      alert("MediaRecorder não suportado neste ambiente.");
+      return;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+
+    recorder.onerror = () => {
+      setIsListening(false);
+      mediaStreamRef.current?.getTracks().forEach(t => t.stop());
+    };
+
+    recorder.onstop = async () => {
+      mediaStreamRef.current?.getTracks().forEach(t => t.stop());
+      const finalMime = recorder.mimeType || "audio/webm";
+      const blob = new Blob(audioChunksRef.current, { type: finalMime });
+
+      if (blob.size === 0) return;
+
+      // Always read fresh from DB — avoids stale state/ref issues after navigation
+      const freshSettings = await db.settings.get(SETTINGS_KEY) as APISettings | null;
+      const hasWhisperKey = !!(
+        freshSettings?.whisperApiKey?.trim() ||
+        (freshSettings?.provider === "openai" && freshSettings?.apiKey)
+      );
+
+      if (hasWhisperKey && freshSettings) {
+        await transcribeWithWhisper(blob, finalMime, freshSettings);
+      } else {
+        setInput("[Configure uma OpenAI API key para voz em Configurações → Chave OpenAI (voz)]");
+      }
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setIsListening(true);
   };
 
   const formatTime = (isoOrDatetime: string) => {
@@ -829,16 +962,89 @@ export function ChatInterface() {
               />
             </div>
 
-            <button
-              onClick={toggleVoice}
-              className={`p-4 rounded-2xl border-2 transition-[background-color,border-color,box-shadow,transform] duration-200 hover:scale-105 active:scale-95 ${
-                isListening
-                  ? "gradient-green-vibrant border-green-500/30 text-white glow-green-strong"
-                  : "glass-button border-transparent text-slate-700 hover:text-slate-900 hover:border-green-500/30"
-              }`}
-            >
-              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </button>
+            {/* Mic button group: [🎤] [▼] */}
+            <div className="relative flex items-stretch" ref={devicePickerRef}>
+              <button
+                onClick={toggleVoice}
+                disabled={isTranscribing}
+                title={isTranscribing ? "Transcrevendo..." : isListening ? "Parar gravação" : "Iniciar gravação de voz"}
+                className={`p-4 rounded-l-2xl border-2 border-r-0 transition-[background-color,border-color,box-shadow,transform] duration-200 hover:scale-105 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100 ${
+                  isListening
+                    ? "gradient-green-vibrant border-green-500/30 text-white glow-green-strong"
+                    : isTranscribing
+                      ? "glass-button border-green-400/40 text-green-600 animate-pulse"
+                      : "glass-button border-transparent text-slate-700 hover:text-slate-900 hover:border-green-500/30"
+                }`}
+              >
+                {isTranscribing
+                  ? <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full" />
+                  : isListening
+                    ? <MicOff className="w-5 h-5" />
+                    : <Mic className="w-5 h-5" />
+                }
+              </button>
+
+              <button
+                onClick={() => setShowDevicePicker(v => !v)}
+                title="Selecionar dispositivo de entrada"
+                className={`px-1.5 rounded-r-2xl border-2 border-l-0 transition-[background-color,border-color,box-shadow] duration-200 ${
+                  isListening
+                    ? "gradient-green-vibrant border-green-500/30 text-white"
+                    : "glass-button border-transparent text-slate-500 hover:text-slate-800 hover:border-green-500/30"
+                }`}
+              >
+                <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showDevicePicker ? "rotate-180" : ""}`} />
+              </button>
+
+              {/* Device picker dropdown */}
+              <AnimatePresence>
+                {showDevicePicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute bottom-full right-0 mb-2 min-w-56 max-w-72 glass-card rounded-2xl border border-green-400/30 shadow-xl shadow-green-500/10 overflow-hidden z-50"
+                  >
+                    <div className="px-3 py-2 border-b border-slate-100/60">
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Entrada de áudio</span>
+                    </div>
+                    {audioDevices.length === 0 ? (
+                      <div className="px-4 py-3 text-xs text-slate-400">Nenhum dispositivo encontrado</div>
+                    ) : (
+                      audioDevices.map((device, i) => (
+                        <button
+                          key={device.deviceId}
+                          onMouseDown={e => {
+                            e.preventDefault();
+                            setSelectedDeviceId(device.deviceId);
+                            setShowDevicePicker(false);
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left transition-colors ${
+                            device.deviceId === selectedDeviceId
+                              ? "bg-green-50 text-green-800"
+                              : "hover:bg-slate-50 text-slate-700"
+                          }`}
+                        >
+                          <Mic className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                          <span className="text-xs flex-1 truncate">
+                            {device.label || `Microfone ${i + 1}`}
+                          </span>
+                          {device.deviceId === selectedDeviceId && (
+                            <Check className="w-3.5 h-3.5 shrink-0 text-green-600" />
+                          )}
+                        </button>
+                      ))
+                    )}
+                    {apiSettings?.provider !== "openai" && (
+                      <div className="px-4 py-2 border-t border-slate-100/60 bg-slate-50/50">
+                        <span className="text-xs text-slate-400">Seleção de dispositivo requer OpenAI (Whisper)</span>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             <button
               onClick={handleSend}
@@ -859,7 +1065,13 @@ export function ChatInterface() {
             {isListening && (
               <>
                 <span className="text-slate-300">·</span>
-                <span className="text-green-500 animate-pulse font-medium">Escutando...</span>
+                <span className="text-red-500 animate-pulse font-medium">● Gravando...</span>
+              </>
+            )}
+            {isTranscribing && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span className="text-green-600 animate-pulse font-medium">Transcrevendo...</span>
               </>
             )}
           </div>

@@ -78,6 +78,7 @@ export interface APISettings {
   temperature: number;
   maxTokens: number;
   endpoint?: string;
+  whisperApiKey?: string;  // OpenAI key used only for voice transcription (optional when provider ≠ openai)
 }
 
 export interface CalendarEvent {
@@ -185,7 +186,8 @@ declare global {
         delete: (id: string)                     => Promise<void>;
       };
       ai: {
-        chat: (messages: AIMessage[], settings: APISettings) => Promise<AIResponse>;
+        chat:       (messages: AIMessage[], settings: APISettings) => Promise<AIResponse>;
+        transcribe: (audioBase64: string, mimeType: string, settings: APISettings) => Promise<{ text?: string; error?: string }>;
       };
       ical: {
         fetch: (url: string) => Promise<{ text?: string; error?: string }>;
@@ -256,8 +258,10 @@ export const db = {
   },
 
   ai: {
-    chat: (messages: AIMessage[], settings: APISettings) =>
+    chat:       (messages: AIMessage[], settings: APISettings) =>
       api.ai.chat(messages, settings),
+    transcribe: (audioBase64: string, mimeType: string, settings: APISettings) =>
+      api.ai.transcribe(audioBase64, mimeType, settings),
   },
 
   ical: {
