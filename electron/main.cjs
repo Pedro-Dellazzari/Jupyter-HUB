@@ -321,8 +321,104 @@ function _unescapeICal(str) {
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
 
+// Windows timezone name → IANA timezone ID (most common, focus on BR + global)
+const _WINDOWS_TZ = {
+  // Brazil
+  'E. South America Standard Time': 'America/Sao_Paulo',
+  'SA Eastern Standard Time':       'America/Fortaleza',
+  'Amazon Standard Time':           'America/Manaus',
+  'Central Brazilian Standard Time':'America/Cuiaba',
+  'Tocantins Standard Time':        'America/Araguaina',
+  'Bahia Standard Time':            'America/Bahia',
+  // Americas
+  'Eastern Standard Time':          'America/New_York',
+  'Central Standard Time':          'America/Chicago',
+  'Mountain Standard Time':         'America/Denver',
+  'Pacific Standard Time':          'America/Los_Angeles',
+  'UTC-02':                         'Etc/GMT+2',
+  'UTC-11':                         'Etc/GMT+11',
+  // Europe
+  'GMT Standard Time':              'Europe/London',
+  'Romance Standard Time':          'Europe/Paris',
+  'W. Europe Standard Time':        'Europe/Berlin',
+  'Central Europe Standard Time':   'Europe/Budapest',
+  'FLE Standard Time':              'Europe/Helsinki',
+  'GTB Standard Time':              'Europe/Athens',
+  'Russia Time Zone 3':             'Europe/Samara',
+  'Russian Standard Time':          'Europe/Moscow',
+  // Asia/Pacific
+  'China Standard Time':            'Asia/Shanghai',
+  'Tokyo Standard Time':            'Asia/Tokyo',
+  'India Standard Time':            'Asia/Kolkata',
+  'Arabian Standard Time':          'Asia/Dubai',
+  'AUS Eastern Standard Time':      'Australia/Sydney',
+  'New Zealand Standard Time':      'Pacific/Auckland',
+  // UTC
+  'UTC':                            'UTC',
+  'Greenwich Standard Time':        'Atlantic/Reykjavik',
+};
+
 /**
- * Parse a DTSTART/DTEND/UNTIL value string and optional TZID param.
+ * Resolve a TZID string to an IANA timezone name.
+ * Accepts Windows names, IANA names (passed through), or null.
+ */
+function _resolveTimezone(tzid) {
+  if (!tzid) return null;
+  const cleaned = tzid.replace(/^TZID=/i, '').trim();
+  if (!cleaned) return null;
+  // Check Windows map first
+  if (_WINDOWS_TZ[cleaned]) return _WINDOWS_TZ[cleaned];
+  // Try as IANA directly (will throw if invalid)
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: cleaned });
+    return cleaned;
+  } catch {
+    return null; // unknown — fall back to floating/local
+  }
+}
+
+/**
+ * Convert a wall-clock datetime in a given IANA timezone to a local Date.
+ * Uses Intl to compute the UTC offset at that approximate moment (DST-aware).
+ */
+function _tzWallToLocal(y, mo, d, h, mi, ianaTimezone) {
+  // Treat the wall-clock as if it were UTC to get a starting point
+  const approxUtc = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, 0));
+
+  // Ask Intl: what does this UTC instant look like in the target timezone?
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat('en-US', {
+    timeZone: ianaTimezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(approxUtc)) {
+    parts[p.type] = p.value;
+  }
+
+  // Offset = approxUtc − (what Intl showed as wall-clock in that TZ)
+  const tzWallMs = Date.UTC(
+    +parts.year, +parts.month - 1, +parts.day,
+    parts.hour === '24' ? 0 : +parts.hour,
+    +parts.minute, +parts.second,
+  );
+  const offsetMs = approxUtc.getTime() - tzWallMs;
+
+  // Actual UTC = intended wall-clock + offset
+  return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, 0) + offsetMs);
+}
+
+/** Format a Date as local { date: "YYYY-MM-DD", time: "HH:MM", allDay: false }. */
+function _localFmt(dt) {
+  return {
+    date: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`,
+    time: `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`,
+    allDay: false,
+  };
+}
+
+/**
+ * Parse a DTSTART/DTEND/RECURRENCE-ID/UNTIL value + optional TZID param.
  * Returns { date: "YYYY-MM-DD", time: "HH:MM", allDay: bool } or null.
  */
 function _parseDTValue(dtValue, tzid) {
@@ -338,26 +434,28 @@ function _parseDTValue(dtValue, tzid) {
     };
   }
 
-  // Date-time: YYYYMMDDTHHMMSS[Z]
-  const m = dtValue.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  // Date-time: YYYYMMDDTHHMMSS[Z]  (also accept 4-digit time YYYYMMDDTHHMM[Z])
+  const m = dtValue.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z?)$/);
   if (!m) return null;
 
   const [, year, month, day, hour, min, , utcZ] = m;
 
+  // UTC — convert to system local time
   if (utcZ === 'Z') {
-    // UTC — convert to system local time via Date object
-    const utcDate = new Date(Date.UTC(
-      parseInt(year), parseInt(month) - 1, parseInt(day),
-      parseInt(hour), parseInt(min), 0,
-    ));
-    return {
-      date: `${utcDate.getFullYear()}-${String(utcDate.getMonth()+1).padStart(2,'0')}-${String(utcDate.getDate()).padStart(2,'0')}`,
-      time: `${String(utcDate.getHours()).padStart(2,'0')}:${String(utcDate.getMinutes()).padStart(2,'0')}`,
-      allDay: false,
-    };
+    return _localFmt(new Date(Date.UTC(+year, +month - 1, +day, +hour, +min, 0)));
   }
 
-  // Local time (TZID or floating) — treat as-is
+  // Named timezone (TZID) — convert wall-clock to local
+  const ianaName = _resolveTimezone(tzid);
+  if (ianaName) {
+    try {
+      return _localFmt(_tzWallToLocal(year, month, day, hour, min, ianaName));
+    } catch {
+      // Intl failed — fall through to floating treatment
+    }
+  }
+
+  // Floating / unknown timezone — treat as local time as-is
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${min}`,
@@ -471,7 +569,12 @@ function _parseICalEvents(rawText) {
     .replace(/\r/g, '\n')
     .replace(/\n[ \t]/g, '');  // fold character is CRLF + SPACE or TAB
 
-  const results = [];
+  // First pass: collect all VEVENT blocks, separating recurring masters,
+  // overrides (RECURRENCE-ID), and plain events.
+  const masters   = new Map(); // uid → { summary, description, parsed, rrule }
+  const overrides = new Map(); // uid → Set of overridden dates (YYYY-MM-DD)
+  const singles   = [];        // plain (non-recurring) events
+
   const blocks = text.split('BEGIN:VEVENT');
 
   for (let i = 1; i < blocks.length; i++) {
@@ -489,11 +592,11 @@ function _parseICalEvents(rawText) {
     const summary = summaryM ? _unescapeICal(summaryM[1].trim()) : '';
     if (!summary) continue;
 
-    // 4. DTSTART  (param may include TZID=... or VALUE=DATE)
+    // 4. DTSTART
     const dtStartM = block.match(/^DTSTART(?:;([^:]*))?:(.+)$/m);
     if (!dtStartM) continue;
-    const tzid  = dtStartM[1] || '';
-    const dtVal = dtStartM[2].trim();
+    const tzid   = dtStartM[1] || '';
+    const dtVal  = dtStartM[2].trim();
     const parsed = _parseDTValue(dtVal, tzid);
     if (!parsed) continue;
 
@@ -501,19 +604,60 @@ function _parseICalEvents(rawText) {
     const descM = block.match(/^DESCRIPTION(?:;[^:]*)?:(.+)$/m);
     const description = descM ? _unescapeICal(descM[1].trim()).slice(0, 300) : '';
 
-    // 6. RRULE — expand recurring events for the next 90 days
+    // 6. UID
+    const uidM = block.match(/^UID:(.+)$/m);
+    const uid  = uidM ? uidM[1].trim() : null;
+
+    // 7. RECURRENCE-ID — this block is an override for a specific occurrence
+    // Capture the RECURRENCE-ID's own TZID param (may differ from DTSTART's)
+    const recIdM = block.match(/^RECURRENCE-ID(?:;([^:]*))?:(.+)$/m);
+    if (recIdM) {
+      const recIdTzid = recIdM[1] || tzid; // use RECURRENCE-ID's own param, fall back to DTSTART's
+      const recParsed = _parseDTValue(recIdM[2].trim(), recIdTzid);
+      if (recParsed && uid) {
+        if (!overrides.has(uid)) overrides.set(uid, new Set());
+        overrides.get(uid).add(recParsed.date);
+      }
+      // Treat this override occurrence as a plain single event at its new time
+      singles.push({ title: summary, date: parsed.date, time: parsed.time, description, allDay: parsed.allDay });
+      continue;
+    }
+
+    // 8. RRULE — recurring master
     const rruleM = block.match(/^RRULE:(.+)$/m);
-    if (rruleM) {
+    if (rruleM && uid) {
+      masters.set(uid, { summary, description, parsed, rrule: rruleM[1].trim() });
+    } else if (rruleM) {
+      // No UID (malformed) — expand inline
       const occs = _expandRRule(rruleM[1].trim(), parsed, 90);
       for (const occ of occs) {
-        results.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
+        singles.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
       }
     } else {
-      results.push({ title: summary, date: parsed.date, time: parsed.time, description, allDay: parsed.allDay });
+      singles.push({ title: summary, date: parsed.date, time: parsed.time, description, allDay: parsed.allDay });
     }
   }
 
-  return results;
+  // Second pass: expand recurring masters, skipping overridden occurrences
+  const results = [...singles];
+  for (const [uid, { summary, description, parsed, rrule }] of masters) {
+    const skippedDates = overrides.get(uid) || new Set();
+    const occs = _expandRRule(rrule, parsed, 90);
+    for (const occ of occs) {
+      if (!skippedDates.has(occ.date)) {
+        results.push({ title: summary, date: occ.date, time: occ.time, description, allDay: occ.allDay });
+      }
+    }
+  }
+
+  // Final dedup by (date + time + title) — belt-and-suspenders
+  const seen = new Set();
+  return results.filter(ev => {
+    const key = `${ev.date}|${ev.time}|${ev.title}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ─── iCal Security Helpers ────────────────────────────────────────────────────
@@ -522,6 +666,7 @@ const _ICAL_MAX_BYTES    = 5_000_000;  // 5 MB
 const _SYNC_COOLDOWN_MS  = 30_000;     // 30 s between syncs per source
 const _FETCH_TIMEOUT_MS  = 15_000;     // 15 s HTTP timeout
 const _syncLastTime      = {};
+const _syncInProgress    = {};         // mutex: prevents concurrent syncs per source
 
 /**
  * Validates an iCal URL.
@@ -691,15 +836,21 @@ function registerIPCHandlers() {
 
   // iCal sync — fetch + parse (RFC 5545) + full-refresh import
   ipcMain.handle('ical:sync', async (_, url, source, color) => {
+    // ── Mutex: prevent concurrent syncs for the same source ───────────────
+    if (_syncInProgress[source]) {
+      return { error: 'Sincronização já em andamento. Aguarde.' };
+    }
+    _syncInProgress[source] = true;
+
     try {
-      // ── Rate limiting ──────────────────────────────────────────────────────
+      // ── Rate limiting ────────────────────────────────────────────────────
       const now = Date.now();
       if (_syncLastTime[source] && now - _syncLastTime[source] < _SYNC_COOLDOWN_MS) {
         const wait = Math.ceil((_SYNC_COOLDOWN_MS - (now - _syncLastTime[source])) / 1000);
         return { error: `Aguarde ${wait}s antes de sincronizar novamente.` };
       }
 
-      // ── Input validation ───────────────────────────────────────────────────
+      // ── Input validation ─────────────────────────────────────────────────
       _validateICalURL(url);                              // SSRF guard
       if (typeof source !== 'string' || !['ical:google', 'ical:outlook'].includes(source)) {
         return { error: 'Fonte inválida.' };
@@ -708,7 +859,7 @@ function registerIPCHandlers() {
         return { error: 'Cor inválida.' };
       }
 
-      // ── Fetch + parse ──────────────────────────────────────────────────────
+      // ── Fetch + parse ────────────────────────────────────────────────────
       const rawText = await _fetchICalText(url);          // timeout + size limit
       if (!rawText.includes('BEGIN:VCALENDAR')) {
         return { error: 'URL não retornou um arquivo iCal válido. Verifique o link.' };
@@ -720,6 +871,8 @@ function registerIPCHandlers() {
       return { found: events.length, imported };
     } catch (err) {
       return { error: err.message };
+    } finally {
+      _syncInProgress[source] = false;                    // always release lock
     }
   });
 }
